@@ -6,6 +6,7 @@ PDF/PNG 다운로드 흐름 개선 런처.
 - 생성 성공 메시지와 저장 폴더 표시
 - 발주 내용이 바뀌면 이전 PDF/PNG 다운로드 상태 초기화
 - 생성 후 st.rerun() 없이 같은 화면에서 바로 저장 버튼 표시
+- 사이드바를 노투스 오렌지 테마로 표시
 """
 
 import hashlib
@@ -16,6 +17,100 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 import app as base_app
+
+
+ORIGINAL_INJECT_CSS = base_app.inject_css
+
+
+def inject_orange_sidebar_css():
+    ORIGINAL_INJECT_CSS()
+    st.markdown(
+        """
+<style>
+/* Notus orange sidebar theme */
+[data-testid="stSidebar"] {
+    background: #f58220 !important;
+}
+
+[data-testid="stSidebar"] > div {
+    background: #f58220 !important;
+}
+
+[data-testid="stSidebar"] .sidebar-title,
+[data-testid="stSidebar"] .sidebar-section,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] span,
+[data-testid="stSidebar"] div {
+    color: #ffffff !important;
+}
+
+[data-testid="stSidebar"] hr {
+    border-color: rgba(255, 255, 255, 0.35) !important;
+}
+
+[data-testid="stSidebar"] .sidebar-title {
+    text-align: left !important;
+    font-weight: 900 !important;
+    letter-spacing: -0.2px !important;
+}
+
+[data-testid="stSidebar"] .sidebar-section {
+    text-align: left !important;
+    padding-left: 4px !important;
+    font-weight: 800 !important;
+    opacity: 0.95 !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stButton"] {
+    width: 100% !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stButton"] > button {
+    justify-content: flex-start !important;
+    text-align: left !important;
+    color: #ffffff !important;
+    background: transparent !important;
+    border: 1px solid rgba(255, 255, 255, 0.28) !important;
+    border-radius: 10px !important;
+    padding-left: 14px !important;
+    box-shadow: none !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stButton"] > button p,
+[data-testid="stSidebar"] [data-testid="stButton"] > button span,
+[data-testid="stSidebar"] [data-testid="stButton"] > button div {
+    color: #ffffff !important;
+    text-align: left !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stButton"] > button:hover {
+    background: #e87511 !important;
+    border-color: rgba(255, 255, 255, 0.55) !important;
+    color: #ffffff !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stButton"] > button[kind="primary"],
+[data-testid="stSidebar"] [data-testid="stButton"] > button[aria-pressed="true"] {
+    background: #c95f00 !important;
+    border-color: #c95f00 !important;
+    color: #ffffff !important;
+    font-weight: 900 !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stButton"] > button[kind="primary"] p,
+[data-testid="stSidebar"] [data-testid="stButton"] > button[kind="primary"] span,
+[data-testid="stSidebar"] [data-testid="stButton"] > button[kind="primary"] div {
+    color: #ffffff !important;
+    font-weight: 900 !important;
+}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+base_app.inject_css = inject_orange_sidebar_css
 
 
 def make_preview_signature(vendor, order_items, request_note, order_date):
