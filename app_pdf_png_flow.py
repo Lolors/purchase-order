@@ -1,12 +1,12 @@
 """
 PDF/PNG 다운로드 흐름 개선 런처.
 
-기존 app.py를 그대로 불러온 뒤 미리보기 내보내기 함수만 교체합니다.
+기존 app.py를 그대로 불러온 뒤 미리보기 내보내기 함수와 사이드바 UI만 교체합니다.
 - PDF/PNG 버튼을 '생성'과 '저장'으로 분리
 - 생성 성공 메시지와 저장 폴더 표시
 - 발주 내용이 바뀌면 이전 PDF/PNG 다운로드 상태 초기화
 - 생성 후 st.rerun() 없이 같은 화면에서 바로 저장 버튼 표시
-- 사이드바를 노투스 오렌지 테마로 표시
+- 사이드바는 흰 배경 / 검은 글씨 / 하위메뉴 들여쓰기 형태로 표시
 """
 
 import hashlib
@@ -22,18 +22,15 @@ import app as base_app
 ORIGINAL_INJECT_CSS = base_app.inject_css
 
 
-def inject_orange_sidebar_css():
+def inject_clean_sidebar_css():
     ORIGINAL_INJECT_CSS()
     st.markdown(
         """
 <style>
-/* Notus orange sidebar theme */
-[data-testid="stSidebar"] {
-    background: #f58220 !important;
-}
-
+/* Clean white sidebar theme */
+[data-testid="stSidebar"],
 [data-testid="stSidebar"] > div {
-    background: #f58220 !important;
+    background: #ffffff !important;
 }
 
 [data-testid="stSidebar"] .sidebar-title,
@@ -42,24 +39,28 @@ def inject_orange_sidebar_css():
 [data-testid="stSidebar"] p,
 [data-testid="stSidebar"] span,
 [data-testid="stSidebar"] div {
-    color: #ffffff !important;
+    color: #111827 !important;
 }
 
 [data-testid="stSidebar"] hr {
-    border-color: rgba(255, 255, 255, 0.35) !important;
+    border-color: #e5e7eb !important;
+    margin: 12px 0 !important;
 }
 
 [data-testid="stSidebar"] .sidebar-title {
     text-align: left !important;
+    color: #111827 !important;
     font-weight: 900 !important;
-    letter-spacing: -0.2px !important;
+    letter-spacing: -0.3px !important;
+    margin-bottom: 16px !important;
 }
 
 [data-testid="stSidebar"] .sidebar-section {
     text-align: left !important;
-    padding-left: 4px !important;
+    color: #6b7280 !important;
+    font-size: 12px !important;
     font-weight: 800 !important;
-    opacity: 0.95 !important;
+    padding: 10px 0 4px 2px !important;
 }
 
 [data-testid="stSidebar"] [data-testid="stButton"] {
@@ -69,40 +70,57 @@ def inject_orange_sidebar_css():
 [data-testid="stSidebar"] [data-testid="stButton"] > button {
     justify-content: flex-start !important;
     text-align: left !important;
-    color: #ffffff !important;
+    width: 100% !important;
+    min-height: 34px !important;
+    color: #111827 !important;
     background: transparent !important;
-    border: 1px solid rgba(255, 255, 255, 0.28) !important;
-    border-radius: 10px !important;
-    padding-left: 14px !important;
+    border: 0 !important;
+    border-radius: 7px !important;
+    padding: 7px 10px !important;
     box-shadow: none !important;
 }
 
 [data-testid="stSidebar"] [data-testid="stButton"] > button p,
 [data-testid="stSidebar"] [data-testid="stButton"] > button span,
 [data-testid="stSidebar"] [data-testid="stButton"] > button div {
-    color: #ffffff !important;
+    color: #111827 !important;
     text-align: left !important;
 }
 
 [data-testid="stSidebar"] [data-testid="stButton"] > button:hover {
-    background: #e87511 !important;
-    border-color: rgba(255, 255, 255, 0.55) !important;
-    color: #ffffff !important;
+    background: #f3f4f6 !important;
+    color: #111827 !important;
+    border: 0 !important;
 }
 
-[data-testid="stSidebar"] [data-testid="stButton"] > button[kind="primary"],
-[data-testid="stSidebar"] [data-testid="stButton"] > button[aria-pressed="true"] {
-    background: #c95f00 !important;
-    border-color: #c95f00 !important;
-    color: #ffffff !important;
+[data-testid="stSidebar"] [data-testid="stButton"] > button[kind="primary"] {
+    background: #e5e7eb !important;
+    color: #111827 !important;
+    border: 0 !important;
     font-weight: 900 !important;
 }
 
 [data-testid="stSidebar"] [data-testid="stButton"] > button[kind="primary"] p,
 [data-testid="stSidebar"] [data-testid="stButton"] > button[kind="primary"] span,
 [data-testid="stSidebar"] [data-testid="stButton"] > button[kind="primary"] div {
-    color: #ffffff !important;
+    color: #111827 !important;
     font-weight: 900 !important;
+}
+
+/* 하위메뉴는 버튼 테두리 없이 들여쓰기된 텍스트 메뉴처럼 표시 */
+[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] [data-testid="column"]:first-child {
+    min-width: 18px !important;
+}
+
+[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] [data-testid="column"]:first-child + div [data-testid="stButton"] > button {
+    padding-left: 6px !important;
+    font-weight: 500 !important;
+    color: #374151 !important;
+}
+
+[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] [data-testid="column"]:first-child + div [data-testid="stButton"] > button[kind="primary"] {
+    background: #f3f4f6 !important;
+    font-weight: 800 !important;
 }
 </style>
 """,
@@ -110,7 +128,52 @@ def inject_orange_sidebar_css():
     )
 
 
-base_app.inject_css = inject_orange_sidebar_css
+base_app.inject_css = inject_clean_sidebar_css
+
+
+def render_clean_sidebar():
+    def go_to(page_name):
+        st.session_state.current_page = page_name
+        st.rerun()
+
+    def top_menu(name):
+        is_active = st.session_state.current_page == name
+        button_type = "primary" if is_active else "secondary"
+        if st.sidebar.button(name, key=f"top_menu_{name}", use_container_width=True, type=button_type):
+            go_to(name)
+
+    def sub_menu(name):
+        is_active = st.session_state.current_page == name
+        button_type = "primary" if is_active else "secondary"
+        indent, body = st.sidebar.columns([0.16, 0.84], gap="small")
+        with indent:
+            st.write("")
+        with body:
+            if st.button(name, key=f"sub_menu_{name}", use_container_width=True, type=button_type):
+                go_to(name)
+
+    st.sidebar.markdown('<div class="sidebar-title">발주관리 시스템</div>', unsafe_allow_html=True)
+
+    top_menu("발주 작성")
+    top_menu("임시저장 목록")
+    top_menu("발주서 목록")
+    top_menu("최근 발주 내역")
+
+    st.sidebar.markdown("<hr>", unsafe_allow_html=True)
+    st.sidebar.markdown('<div class="sidebar-section">기초 관리</div>', unsafe_allow_html=True)
+    sub_menu("거래처 관리")
+    sub_menu("제품 관리")
+    sub_menu("별칭 관리")
+
+    st.sidebar.markdown("<hr>", unsafe_allow_html=True)
+    st.sidebar.markdown('<div class="sidebar-section">통계</div>', unsafe_allow_html=True)
+    sub_menu("발주 통계")
+    sub_menu("품목별 발주 통계")
+
+    return st.session_state.current_page
+
+
+base_app.render_sidebar = render_clean_sidebar
 
 
 def make_preview_signature(vendor, order_items, request_note, order_date):
