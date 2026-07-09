@@ -6,16 +6,21 @@ PDF/PNG 다운로드 흐름 개선 런처.
 - 생성 성공 메시지와 저장 폴더 표시
 - 발주 내용이 바뀌면 이전 PDF/PNG 다운로드 상태 초기화
 - 생성 후 st.rerun() 없이 같은 화면에서 바로 저장 버튼 표시
+- 엑셀/PDF/PNG 저장 안내 메시지는 3초 뒤 자동으로 숨김
 """
 
 import hashlib
 import json
+import time
 from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
 
 import app as base_app
+
+
+EXPORT_MESSAGE_SECONDS = 3
 
 
 def make_preview_signature(vendor, order_items, request_note, order_date):
@@ -35,14 +40,54 @@ def make_preview_signature(vendor, order_items, request_note, order_date):
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
+def set_export_message(message):
+    st.session_state["preview_export_message"] = message
+    st.session_state["preview_export_message_time"] = time.time()
+
+
 def reset_preview_export_state():
     for key in [
         "preview_pdf_path",
         "preview_png_path",
         "preview_capture_error",
         "preview_export_message",
+        "preview_export_message_time",
     ]:
         st.session_state.pop(key, None)
+
+
+def show_temporary_export_message():
+    capture_error = st.session_state.get("preview_capture_error")
+    export_message = st.session_state.get("preview_export_message")
+    message_time = st.session_state.get("preview_export_message_time")
+
+    if capture_error:
+        st.error(
+            "PDF/PNG 캡쳐 생성에 실패했습니다. 앱을 실행한 Python 환경에서 Playwright와 Chromium이 설치되어 있는지 확인하세요.\n\n"
+            "확인 명령:\n"
+            "python -c \"from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True); print('OK'); b.close(); p.stop()\"\n\n"
+            f"오류내용: {capture_error}"
+        )
+        return
+
+    if not export_message or not message_time:
+        return
+
+    elapsed = time.time() - float(message_time)
+    if elapsed >= EXPORT_MESSAGE_SECONDS:
+        st.session_state.pop("preview_export_message", None)
+        st.session_state.pop("preview_export_message_time", None)
+        return
+
+    placeholder = st.empty()
+    with placeholder.container():
+        st.success(export_message)
+        st.caption(f"저장 폴더: {base_app.PDF_OUTPUT}")
+
+    time.sleep(max(0, EXPORT_MESSAGE_SECONDS - elapsed))
+    placeholder.empty()
+    st.session_state.pop("preview_export_message", None)
+    st.session_state.pop("preview_export_message_time", None)
 
 
 def render_purchase_preview(vendor, order_items, request_note, order_date=None):
@@ -66,6 +111,8 @@ def render_purchase_preview(vendor, order_items, request_note, order_date=None):
             use_container_width=True,
             key=f"preview_xls_{len(order_items)}_{order_date}",
             help="엑셀 내려받기",
+            on_click=set_export_message,
+            args=(f"엑셀 저장 준비 완료: {excel_path}",),
         )
 
     with top_pdf:
@@ -74,7 +121,7 @@ def render_purchase_preview(vendor, order_items, request_note, order_date=None):
                 with st.spinner("PDF 생성 중..."):
                     pdf_path = base_app.create_preview_pdf(vendor, order_items, request_note, order_date)
                 st.session_state["preview_pdf_path"] = str(pdf_path)
-                st.session_state["preview_export_message"] = f"PDF 생성 완료: {pdf_path}"
+                set_export_message(f"PDF 생성 완료: {pdf_path}")
                 st.session_state.pop("preview_capture_error", None)
             except Exception as e:
                 st.session_state["preview_capture_error"] = str(e)
@@ -91,6 +138,8 @@ def render_purchase_preview(vendor, order_items, request_note, order_date=None):
                 use_container_width=True,
                 key=f"preview_pdf_download_{pdf_path.name}",
                 help="생성된 PDF 내려받기",
+                on_click=set_export_message,
+                args=(f"PDF 저장 준비 완료: {pdf_path}",),
             )
 
     with top_png:
@@ -99,7 +148,7 @@ def render_purchase_preview(vendor, order_items, request_note, order_date=None):
                 with st.spinner("PNG 생성 중..."):
                     png_path = base_app.create_preview_image(vendor, order_items, request_note, order_date)
                 st.session_state["preview_png_path"] = str(png_path)
-                st.session_state["preview_export_message"] = f"PNG 생성 완료: {png_path}"
+                set_export_message(f"PNG 생성 완료: {png_path}")
                 st.session_state.pop("preview_capture_error", None)
             except Exception as e:
                 st.session_state["preview_capture_error"] = str(e)
@@ -116,20 +165,11 @@ def render_purchase_preview(vendor, order_items, request_note, order_date=None):
                 use_container_width=True,
                 key=f"preview_png_download_{png_path.name}",
                 help="생성된 PNG 내려받기",
+                on_click=set_export_message,
+                args=(f"PNG 저장 준비 완료: {png_path}",),
             )
 
-    capture_error = st.session_state.get("preview_capture_error")
-    export_message = st.session_state.get("preview_export_message")
-    if capture_error:
-        st.error(
-            "PDF/PNG 캡쳐 생성에 실패했습니다. 앱을 실행한 Python 환경에서 Playwright와 Chromium이 설치되어 있는지 확인하세요.\n\n"
-            "확인 명령:\n"
-            "python -c \"from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True); print('OK'); b.close(); p.stop()\"\n\n"
-            f"오류내용: {capture_error}"
-        )
-    elif export_message:
-        st.success(export_message)
-        st.caption(f"저장 폴더: {base_app.PDF_OUTPUT}")
+    show_temporary_export_message()
 
     html = base_app.render_order_html(vendor, order_items, request_note, order_date=order_date)
     components.html(html, height=790, scrolling=True)
