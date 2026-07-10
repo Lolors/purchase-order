@@ -15,6 +15,7 @@ import hashlib
 import json
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
@@ -25,33 +26,7 @@ import app as base_app
 
 
 EXPORT_MESSAGE_SECONDS = 3
-ORIGINAL_RENDER_ORDER_HTML = base_app.render_order_html
 ORIGINAL_CREATE_EXCEL = base_app.create_excel
-
-
-def swap_preview_item_columns(html):
-    """품목 표의 단위/수량 순서를 수량/단위 순서로 바꿉니다."""
-    html = html.replace(
-        "<th>규격</th>\n                <th>단위</th>\n                <th>수량</th>",
-        "<th>규격</th>\n                <th>수량</th>\n                <th>단위</th>",
-    )
-
-    tbody_match = re.search(r"(<tbody>)(.*?)(</tbody>)", html, flags=re.DOTALL)
-    if not tbody_match:
-        return html
-
-    tbody = tbody_match.group(2)
-
-    def swap_row(match):
-        row_html = match.group(0)
-        cells = re.findall(r"<td(?:\s+class=\"[^\"]*\")?>.*?</td>", row_html, flags=re.DOTALL)
-        if len(cells) != 6:
-            return row_html
-        cells[4], cells[5] = cells[5], cells[4]
-        return "<tr>\n" + "\n".join(f"            {cell}" for cell in cells) + "\n        </tr>"
-
-    swapped_tbody = re.sub(r"<tr>.*?</tr>", swap_row, tbody, flags=re.DOTALL)
-    return html[: tbody_match.start(2)] + swapped_tbody + html[tbody_match.end(2) :]
 
 
 def hide_empty_request_box(html, request_note):
@@ -67,10 +42,61 @@ def hide_empty_request_box(html, request_note):
 
 
 def render_order_html(vendor, order_items, request_note, order_id=None, order_date=None):
-    html = ORIGINAL_RENDER_ORDER_HTML(vendor, order_items, request_note, order_id=order_id, order_date=order_date)
-    html = swap_preview_item_columns(html)
-    html = hide_empty_request_box(html, request_note)
-    return html
+    """발주서 미리보기 HTML을 수량/단위 순서로 직접 렌더링합니다."""
+    template = base_app.TEMPLATE_FILE.read_text(encoding="utf-8") if base_app.TEMPLATE_FILE.exists() else base_app.DEFAULT_TEMPLATE
+    logo_b64 = base_app.get_logo_base64()
+
+    order_id = order_id or f"PO-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    order_date = order_date or datetime.now().strftime("%Y-%m-%d")
+
+    template = template.replace(
+        "<th>규격</th>\n                <th>단위</th>\n                <th>수량</th>",
+        "<th>규격</th>\n                <th>수량</th>\n                <th>단위</th>",
+    )
+
+    rows_html = ""
+    for idx, item in enumerate(order_items, 1):
+        rows_html += f"""
+        <tr>
+            <td>{idx}</td>
+            <td>{item.get("제품코드", "")}</td>
+            <td class="left">{item.get("정식제품명", "")}</td>
+            <td>{item.get("규격", "")}</td>
+            <td>{base_app.fmt_int(item.get("수량", 0))}</td>
+            <td>{item.get("단위", "")}</td>
+        </tr>
+        """
+
+    if not rows_html:
+        rows_html = '<tr><td colspan="6" class="empty">발주 품목이 없습니다.</td></tr>'
+
+    total_count, total_qty = base_app.calc_totals(order_items)
+
+    if logo_b64:
+        template = template.replace("{% if_logo %}", "").replace("{% else_logo %}", "<!--").replace("{% endif_logo %}", "-->")
+    else:
+        template = template.replace("{% if_logo %}", "<!--").replace("{% else_logo %}", "-->").replace("{% endif_logo %}", "")
+
+    html = (
+        template
+        .replace("{{LOGO_BASE64}}", logo_b64)
+        .replace("{{ORDER_ID}}", order_id)
+        .replace("{{ORDER_DATE}}", order_date)
+        .replace("{{COMPANY_NAME}}", base_app.COMPANY["상호"])
+        .replace("{{COMPANY_OWNER}}", base_app.COMPANY["대표"])
+        .replace("{{COMPANY_ADDRESS}}", base_app.COMPANY["주소"])
+        .replace("{{COMPANY_PHONE}}", base_app.COMPANY["연락처"])
+        .replace("{{COMPANY_FAX}}", base_app.COMPANY["팩스"])
+        .replace("{{COMPANY_REGNO}}", base_app.COMPANY["등록번호"])
+        .replace("{{VENDOR_NAME}}", str(vendor.get("거래처명", "")))
+        .replace("{{VENDOR_ADDRESS}}", str(vendor.get("배송지", "")))
+        .replace("{{VENDOR_PHONE}}", str(vendor.get("연락처", "")))
+        .replace("{{ITEM_ROWS}}", rows_html)
+        .replace("{{TOTAL_COUNT}}", base_app.fmt_int(total_count))
+        .replace("{{TOTAL_QTY}}", base_app.fmt_int(total_qty))
+        .replace("{{REQUEST_NOTE}}", request_note or "")
+    )
+    return hide_empty_request_box(html, request_note)
 
 
 def create_excel(vendor, order_items, request_note, order_date=None):
