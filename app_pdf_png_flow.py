@@ -7,7 +7,7 @@ PDF/PNG 다운로드 흐름 개선 런처.
 - 발주 내용이 바뀌면 이전 PDF/PNG 다운로드 상태 초기화
 - 생성 후 st.rerun() 없이 같은 화면에서 바로 저장 버튼 표시
 - 엑셀/PDF/PNG 저장 안내 메시지는 3초 뒤 자동으로 숨김
-- 발주서 품목 표 순서는 No. / 제품코드 / 제품명 / 규격 / 수량 / 단위로 표시
+- 발주서 미리보기 품목 표는 No. / 제품명 / 규격 / 수량 / 단위로 표시
 - 요청사항이 비어 있으면 발주서 미리보기에서 요청사항 박스를 숨김
 """
 
@@ -41,25 +41,37 @@ def hide_empty_request_box(html, request_note):
     )
 
 
+def prepare_preview_template(template):
+    """미리보기 표에서 제품코드 컬럼을 제거하고 수량/단위 순서로 맞춥니다."""
+    template = template.replace(
+        "<th>No.</th>\n                <th>제품코드</th>\n                <th>제품명</th>\n                <th>규격</th>\n                <th>단위</th>\n                <th>수량</th>",
+        "<th>No.</th>\n                <th>제품명</th>\n                <th>규격</th>\n                <th>수량</th>\n                <th>단위</th>",
+    )
+    template = template.replace(
+        "<th>No.</th>\n                <th>제품코드</th>\n                <th>제품명</th>\n                <th>규격</th>\n                <th>수량</th>\n                <th>단위</th>",
+        "<th>No.</th>\n                <th>제품명</th>\n                <th>규격</th>\n                <th>수량</th>\n                <th>단위</th>",
+    )
+    template = template.replace(
+        ".item-table th:nth-child(2),\n.item-table td:nth-child(2) {\n    width: 92px;\n}\n\n.item-table th:nth-child(3),\n.item-table td:nth-child(3) {\n    width: 230px;\n}",
+        ".item-table th:nth-child(2),\n.item-table td:nth-child(2) {\n    width: 280px;\n}\n\n.item-table th:nth-child(3),\n.item-table td:nth-child(3) {\n    width: 120px;\n}",
+    )
+    return template
+
+
 def render_order_html(vendor, order_items, request_note, order_id=None, order_date=None):
-    """발주서 미리보기 HTML을 수량/단위 순서로 직접 렌더링합니다."""
+    """발주서 미리보기 HTML을 제품코드 없이 직접 렌더링합니다."""
     template = base_app.TEMPLATE_FILE.read_text(encoding="utf-8") if base_app.TEMPLATE_FILE.exists() else base_app.DEFAULT_TEMPLATE
+    template = prepare_preview_template(template)
     logo_b64 = base_app.get_logo_base64()
 
     order_id = order_id or f"PO-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     order_date = order_date or datetime.now().strftime("%Y-%m-%d")
-
-    template = template.replace(
-        "<th>규격</th>\n                <th>단위</th>\n                <th>수량</th>",
-        "<th>규격</th>\n                <th>수량</th>\n                <th>단위</th>",
-    )
 
     rows_html = ""
     for idx, item in enumerate(order_items, 1):
         rows_html += f"""
         <tr>
             <td>{idx}</td>
-            <td>{item.get("제품코드", "")}</td>
             <td class="left">{item.get("정식제품명", "")}</td>
             <td>{item.get("규격", "")}</td>
             <td>{base_app.fmt_int(item.get("수량", 0))}</td>
@@ -68,7 +80,7 @@ def render_order_html(vendor, order_items, request_note, order_id=None, order_da
         """
 
     if not rows_html:
-        rows_html = '<tr><td colspan="6" class="empty">발주 품목이 없습니다.</td></tr>'
+        rows_html = '<tr><td colspan="5" class="empty">발주 품목이 없습니다.</td></tr>'
 
     total_count, total_qty = base_app.calc_totals(order_items)
 
@@ -100,7 +112,7 @@ def render_order_html(vendor, order_items, request_note, order_id=None, order_da
 
 
 def create_excel(vendor, order_items, request_note, order_date=None):
-    """엑셀 저장 파일도 미리보기와 같은 수량/단위 순서로 맞춥니다."""
+    """엑셀 저장 파일은 기존처럼 제품코드를 유지하되 수량/단위 순서로 맞춥니다."""
     path = ORIGINAL_CREATE_EXCEL(vendor, order_items, request_note, order_date)
     wb = load_workbook(path)
     ws = wb.active
