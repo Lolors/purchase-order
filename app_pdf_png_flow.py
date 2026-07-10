@@ -7,20 +7,98 @@ PDF/PNG 다운로드 흐름 개선 런처.
 - 발주 내용이 바뀌면 이전 PDF/PNG 다운로드 상태 초기화
 - 생성 후 st.rerun() 없이 같은 화면에서 바로 저장 버튼 표시
 - 엑셀/PDF/PNG 저장 안내 메시지는 3초 뒤 자동으로 숨김
+- 발주서 품목 표 순서는 No. / 제품코드 / 제품명 / 규격 / 수량 / 단위로 표시
+- 요청사항이 비어 있으면 발주서 미리보기에서 요청사항 박스를 숨김
 """
 
 import hashlib
 import json
+import re
 import time
 from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
+from openpyxl import load_workbook
 
 import app as base_app
 
 
 EXPORT_MESSAGE_SECONDS = 3
+ORIGINAL_RENDER_ORDER_HTML = base_app.render_order_html
+ORIGINAL_CREATE_EXCEL = base_app.create_excel
+
+
+def swap_preview_item_columns(html):
+    """품목 표의 단위/수량 순서를 수량/단위 순서로 바꿉니다."""
+    html = html.replace(
+        "<th>규격</th>\n                <th>단위</th>\n                <th>수량</th>",
+        "<th>규격</th>\n                <th>수량</th>\n                <th>단위</th>",
+    )
+
+    tbody_match = re.search(r"(<tbody>)(.*?)(</tbody>)", html, flags=re.DOTALL)
+    if not tbody_match:
+        return html
+
+    tbody = tbody_match.group(2)
+
+    def swap_row(match):
+        row_html = match.group(0)
+        cells = re.findall(r"<td(?:\s+class=\"[^\"]*\")?>.*?</td>", row_html, flags=re.DOTALL)
+        if len(cells) != 6:
+            return row_html
+        cells[4], cells[5] = cells[5], cells[4]
+        return "<tr>\n" + "\n".join(f"            {cell}" for cell in cells) + "\n        </tr>"
+
+    swapped_tbody = re.sub(r"<tr>.*?</tr>", swap_row, tbody, flags=re.DOTALL)
+    return html[: tbody_match.start(2)] + swapped_tbody + html[tbody_match.end(2) :]
+
+
+def hide_empty_request_box(html, request_note):
+    """요청사항이 없으면 요청사항 박스를 표시하지 않습니다."""
+    if str(request_note or "").strip():
+        return html
+    return re.sub(
+        r"\s*<div class=\"request\">\s*<b>요청사항</b><br>\s*-\s*</div>\s*",
+        "\n",
+        html,
+        flags=re.DOTALL,
+    )
+
+
+def render_order_html(vendor, order_items, request_note, order_id=None, order_date=None):
+    html = ORIGINAL_RENDER_ORDER_HTML(vendor, order_items, request_note, order_id=order_id, order_date=order_date)
+    html = swap_preview_item_columns(html)
+    html = hide_empty_request_box(html, request_note)
+    return html
+
+
+def create_excel(vendor, order_items, request_note, order_date=None):
+    """엑셀 저장 파일도 미리보기와 같은 수량/단위 순서로 맞춥니다."""
+    path = ORIGINAL_CREATE_EXCEL(vendor, order_items, request_note, order_date)
+    wb = load_workbook(path)
+    ws = wb.active
+
+    start_row = 14
+    ws.cell(start_row, 5, "수량")
+    ws.cell(start_row, 6, "단위")
+
+    for idx, item in enumerate(order_items, 1):
+        row_num = start_row + idx
+        ws.cell(row_num, 5, base_app.safe_int(item.get("수량", 0)))
+        ws.cell(row_num, 6, item.get("단위", ""))
+
+    if not str(request_note or "").strip():
+        total_row = start_row + len(order_items) + 2
+        ws.cell(total_row + 3, 1, "")
+        ws.cell(total_row + 4, 1, "")
+
+    wb.save(path)
+    return path
+
+
+base_app.render_order_html = render_order_html
+base_app.create_excel = create_excel
 
 
 def make_preview_signature(vendor, order_items, request_note, order_date):
