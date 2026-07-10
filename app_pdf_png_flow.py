@@ -1,7 +1,7 @@
 """
 PDF/PNG 다운로드 흐름 개선 런처.
 
-기존 app.py를 그대로 불러온 뒤 미리보기 내보내기 함수만 교체합니다.
+기존 app.py를 그대로 불러온 뒤 미리보기 내보내기 함수와 일부 화면만 교체합니다.
 - PDF/PNG 버튼을 '생성'과 '저장'으로 분리
 - 생성 성공 메시지와 저장 폴더 표시
 - 발주 내용이 바뀌면 이전 PDF/PNG 다운로드 상태 초기화
@@ -9,6 +9,7 @@ PDF/PNG 다운로드 흐름 개선 런처.
 - 엑셀/PDF/PNG 저장 안내 메시지는 3초 뒤 자동으로 숨김
 - 발주서 미리보기 품목 표는 No. / 제품명 / 규격 / 수량 / 단위로 표시
 - 요청사항이 비어 있으면 발주서 미리보기에서 요청사항 박스를 숨김
+- 제품 관리는 엑셀 양식 다운로드/업로드를 지원하고, 수정 저장 시 체크 행이 사라지지 않게 처리
 """
 
 import hashlib
@@ -16,8 +17,10 @@ import json
 import re
 import time
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 from openpyxl import load_workbook
@@ -26,6 +29,7 @@ import app as base_app
 
 
 EXPORT_MESSAGE_SECONDS = 3
+PRODUCT_COLUMNS = ["제품코드", "정식제품명", "규격", "단위"]
 ORIGINAL_CREATE_EXCEL = base_app.create_excel
 
 
@@ -135,8 +139,172 @@ def create_excel(vendor, order_items, request_note, order_date=None):
     return path
 
 
+def normalize_product_table(df):
+    """제품 엑셀/편집 데이터를 저장 가능한 형태로 정리합니다."""
+    df = df.copy()
+    for col in PRODUCT_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+
+    df = df[PRODUCT_COLUMNS].fillna("")
+    for col in PRODUCT_COLUMNS:
+        df[col] = df[col].astype(str).str.strip()
+
+    # 완전히 빈 줄과 제품명이 없는 줄은 저장하지 않습니다.
+    df = df[df[PRODUCT_COLUMNS].apply(lambda row: any(str(v).strip() for v in row), axis=1)]
+    df = df[df["정식제품명"].str.strip() != ""]
+    return df.reset_index(drop=True)
+
+
+def product_excel_bytes(df=None):
+    """제품 업로드용 엑셀 양식을 만듭니다."""
+    if df is None or df.empty:
+        df = pd.DataFrame(columns=PRODUCT_COLUMNS)
+    else:
+        df = normalize_product_table(df)
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="제품목록")
+        ws = writer.book["제품목록"]
+        widths = {"A": 18, "B": 34, "C": 18, "D": 12}
+        for col, width in widths.items():
+            ws.column_dimensions[col].width = width
+    output.seek(0)
+    return output.getvalue()
+
+
+def read_product_upload(uploaded_file):
+    """업로드된 제품 엑셀/CSV를 읽습니다."""
+    suffix = Path(uploaded_file.name).suffix.lower()
+    if suffix == ".csv":
+        raw = pd.read_csv(uploaded_file, dtype=str).fillna("")
+    else:
+        raw = pd.read_excel(uploaded_file, dtype=str).fillna("")
+
+    missing = [col for col in PRODUCT_COLUMNS if col not in raw.columns]
+    if missing:
+        raise ValueError("필수 컬럼이 없습니다: " + ", ".join(missing))
+
+    clean = normalize_product_table(raw)
+    duplicate_codes = clean[clean["제품코드"] != ""]["제품코드"]
+    if duplicate_codes.duplicated().any():
+        duplicated = duplicate_codes[duplicate_codes.duplicated()].drop_duplicates().tolist()
+        raise ValueError("중복 제품코드가 있습니다: " + ", ".join(duplicated[:10]))
+
+    return clean
+
+
+def page_product_manage(products):
+    st.markdown("## 제품 관리")
+    st.caption("제품코드, 정식제품명, 규격, 단위를 관리합니다. 단가/금액은 사용하지 않습니다.")
+
+    with st.container(border=True):
+        st.markdown("### 신규 제품 추가")
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            new_code = st.text_input("제품코드", value="", placeholder="업체 고유코드가 있으면 입력")
+            new_name = st.text_input("정식제품명")
+        with c2:
+            new_spec = st.text_input("규격")
+            new_unit = st.text_input("단위", value="EA")
+        if st.button("제품 추가", type="primary", use_container_width=True):
+            if not new_name.strip():
+                st.warning("정식제품명을 입력하세요.")
+            elif new_code.strip() and new_code.strip() in products["제품코드"].tolist():
+                st.warning("이미 존재하는 제품코드입니다.")
+            else:
+                new_row = pd.DataFrame([{
+                    "제품코드": new_code.strip(),
+                    "정식제품명": new_name.strip(),
+                    "규격": new_spec.strip(),
+                    "단위": new_unit.strip(),
+                }])
+                products = pd.concat([products, new_row], ignore_index=True)
+                base_app.save_products(products)
+                st.success("제품을 추가했습니다.")
+                st.rerun()
+
+    with st.container(border=True):
+        st.markdown("### 엑셀로 제품 목록 일괄 등록/수정")
+        st.caption("양식의 컬럼명은 반드시 제품코드 / 정식제품명 / 규격 / 단위 순서로 유지하세요. 업로드 저장 시 현재 제품 목록이 업로드 파일 기준으로 교체됩니다.")
+
+        d1, d2 = st.columns(2)
+        with d1:
+            st.download_button(
+                "제품 업로드 양식 다운로드",
+                data=product_excel_bytes(),
+                file_name="제품목록_업로드양식.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        with d2:
+            st.download_button(
+                "현재 제품 목록 다운로드",
+                data=product_excel_bytes(products),
+                file_name="현재_제품목록.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+        uploaded = st.file_uploader("제품 목록 엑셀 업로드", type=["xlsx", "xls", "csv"], key="product_bulk_upload")
+        if uploaded is not None:
+            try:
+                uploaded_products = read_product_upload(uploaded)
+                st.success(f"업로드 파일에서 {len(uploaded_products)}개 제품을 읽었습니다.")
+                st.dataframe(uploaded_products, use_container_width=True, hide_index=True)
+
+                if st.button("업로드 파일로 제품 목록 저장", type="primary", use_container_width=True):
+                    base_app.save_products(uploaded_products)
+                    st.success("업로드한 제품 목록으로 저장했습니다.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"제품 목록 업로드 실패: {e}")
+
+    st.markdown("### 제품 목록 수정")
+
+    if products.empty:
+        st.info("등록된 제품이 없습니다.")
+        return
+
+    edit_df = products.copy()
+    edit_df["삭제"] = False
+    edit_df = edit_df[["삭제", "제품코드", "정식제품명", "규격", "단위"]]
+
+    edited = st.data_editor(
+        edit_df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        column_config={
+            "삭제": st.column_config.CheckboxColumn("삭제"),
+        },
+        key="product_editor",
+    )
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        if st.button("제품 수정 저장", use_container_width=True):
+            # 수정 저장은 체크박스를 무시하고 현재 편집 내용을 그대로 저장합니다.
+            clean = normalize_product_table(edited.drop(columns=["삭제"]))
+            base_app.save_products(clean)
+            st.success("제품 정보를 저장했습니다.")
+            st.rerun()
+
+    with c2:
+        if st.button("선택 제품 삭제", use_container_width=True):
+            clean = edited[edited["삭제"] != True].drop(columns=["삭제"])
+            clean = normalize_product_table(clean)
+            base_app.save_products(clean)
+            st.success("선택한 제품을 삭제했습니다.")
+            st.rerun()
+
+
 base_app.render_order_html = render_order_html
 base_app.create_excel = create_excel
+base_app.page_product_manage = page_product_manage
 
 
 def make_preview_signature(vendor, order_items, request_note, order_date):
