@@ -1,4 +1,6 @@
-"""발주 검색 기본값과 대량 제품 검색 속도를 개선하는 실행 런처."""
+"""발주 검색 속도, 별칭 우선순위, 선택 발주일자 저장을 보정하는 실행 런처."""
+
+from datetime import date, datetime
 
 import pandas as pd
 
@@ -138,8 +140,85 @@ def search_products(keyword, vendor_name, products, aliases):
     return _sort_results(fuzzy_rows)
 
 
+def _selected_order_date():
+    """발주 작성 화면에서 선택한 발주일자를 date 객체로 반환합니다."""
+    value = base_app.st.session_state.get("order_date")
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if value:
+        try:
+            return pd.to_datetime(value).date()
+        except Exception:
+            pass
+    return datetime.now().date()
+
+
+def save_order_with_selected_date(vendor_name, request_note, order_items):
+    """선택한 발주일자로 발주ID와 발주일시를 생성해 저장합니다."""
+    orders = base_app.read_csv(
+        base_app.ORDERS_FILE,
+        ["발주ID", "발주일시", "거래처명", "요청사항", "상태", "총품목수", "총수량"],
+    )
+    order_items_df = base_app.read_csv(
+        base_app.ORDER_ITEMS_FILE,
+        ["발주ID", "순번", "제품코드", "정식제품명", "검색별칭", "규격", "단위", "수량"],
+    )
+
+    selected_date = _selected_order_date()
+    now = datetime.now()
+    selected_datetime = datetime.combine(selected_date, now.time().replace(microsecond=0))
+    order_id = f"PO-{selected_datetime.strftime('%Y%m%d-%H%M%S')}"
+
+    # 같은 초에 중복 저장했을 때 기존 발주를 덮어쓰지 않도록 순번을 붙입니다.
+    existing_ids = set(orders["발주ID"].astype(str).tolist())
+    if order_id in existing_ids:
+        suffix = 2
+        candidate = f"{order_id}-{suffix}"
+        while candidate in existing_ids:
+            suffix += 1
+            candidate = f"{order_id}-{suffix}"
+        order_id = candidate
+
+    total_count, total_qty = base_app.calc_totals(order_items)
+    orders = pd.concat([
+        orders,
+        pd.DataFrame([{
+            "발주ID": order_id,
+            "발주일시": selected_datetime.strftime("%Y-%m-%d %H:%M:%S"),
+            "거래처명": vendor_name,
+            "요청사항": request_note,
+            "상태": "발주완료",
+            "총품목수": total_count,
+            "총수량": total_qty,
+        }]),
+    ], ignore_index=True)
+
+    rows = []
+    for idx, item in enumerate(order_items, 1):
+        rows.append({
+            "발주ID": order_id,
+            "순번": idx,
+            "제품코드": item.get("제품코드", ""),
+            "정식제품명": item.get("정식제품명", ""),
+            "검색별칭": item.get("검색별칭", ""),
+            "규격": item.get("규격", ""),
+            "단위": item.get("단위", ""),
+            "수량": base_app.safe_int(item.get("수량", 0)),
+        })
+
+    if rows:
+        order_items_df = pd.concat([order_items_df, pd.DataFrame(rows)], ignore_index=True)
+
+    orders.to_csv(base_app.ORDERS_FILE, index=False, encoding="utf-8-sig")
+    order_items_df.to_csv(base_app.ORDER_ITEMS_FILE, index=False, encoding="utf-8-sig")
+    return order_id
+
+
 base_app.st.text_input = text_input_without_default_sample
 base_app.search_products = search_products
+base_app.save_order = save_order_with_selected_date
 
 
 if __name__ == "__main__":
