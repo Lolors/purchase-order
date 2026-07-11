@@ -1,4 +1,4 @@
 @echo off
 cd /d "%~dp0"
-python -m streamlit run app_order_id_yy.py
+python -m streamlit run app_statement_detail.py
 pause
