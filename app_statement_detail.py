@@ -1,4 +1,7 @@
-"""거래명세서 상세 조회와 개별 삭제 기능을 추가하는 실행 런처."""
+"""거래명세서 상세 조회와 안전한 개별 삭제 기능을 추가하는 실행 런처."""
+
+from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 
@@ -8,18 +11,48 @@ purchase = current.purchase
 base_app = current.base_app
 
 
+def _backup_purchase_files():
+    """삭제 직전 거래명세서 관련 CSV를 백업합니다."""
+    backup_dir = Path(base_app.DATA) / "backup"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    for source in [
+        purchase.STATEMENTS_FILE,
+        purchase.STATEMENT_ITEMS_FILE,
+        purchase.PRICE_HISTORY_FILE,
+    ]:
+        if source.exists():
+            target = backup_dir / f"{source.stem}_{stamp}{source.suffix}"
+            target.write_bytes(source.read_bytes())
+
+
 def delete_statement(statement_id):
-    """선택한 거래명세서와 연결 품목/가격이력을 함께 삭제합니다."""
-    statement_id = str(statement_id)
+    """선택한 거래명세서 1건과 연결 품목/가격이력만 삭제합니다."""
+    statement_id = str(statement_id).strip()
     statements, statement_items, price_history, _ = purchase.load_purchase_data()
 
-    statements = statements[statements["명세서ID"].astype(str) != statement_id]
+    id_series = statements["명세서ID"].astype(str).str.strip()
+    matched_count = int((id_series == statement_id).sum())
+
+    if not statement_id:
+        raise ValueError("명세서ID가 비어 있어 삭제할 수 없습니다.")
+    if matched_count == 0:
+        raise ValueError("선택한 거래명세서를 찾을 수 없습니다.")
+    if matched_count > 1:
+        raise ValueError(
+            f"같은 명세서ID가 {matched_count}건 존재하여 안전을 위해 삭제를 중단했습니다."
+        )
+
+    _backup_purchase_files()
+
+    statements = statements[id_series != statement_id].copy()
     statement_items = statement_items[
-        statement_items["명세서ID"].astype(str) != statement_id
-    ]
+        statement_items["명세서ID"].astype(str).str.strip() != statement_id
+    ].copy()
     price_history = price_history[
-        price_history["명세서ID"].astype(str) != statement_id
-    ]
+        price_history["명세서ID"].astype(str).str.strip() != statement_id
+    ].copy()
 
     purchase.save_table(
         purchase.STATEMENTS_FILE,
@@ -39,13 +72,26 @@ def delete_statement(statement_id):
 
 
 def page_statement_list_with_detail():
-    """거래명세서 목록, 상세 품목, 삭제 기능을 제공합니다."""
+    """거래명세서 목록, 상세 품목, 안전한 삭제 기능을 제공합니다."""
     statements, statement_items, _, _ = purchase.load_purchase_data()
     base_app.st.markdown("## 거래명세서 내역")
 
     if statements.empty:
         base_app.st.info("등록된 거래명세서가 없습니다.")
         return
+
+    statements = statements.copy()
+    statements["명세서ID"] = statements["명세서ID"].astype(str).str.strip()
+
+    duplicate_mask = statements["명세서ID"].duplicated(keep=False) | (statements["명세서ID"] == "")
+    duplicate_ids = statements.loc[duplicate_mask, "명세서ID"].tolist()
+    if duplicate_ids:
+        display_ids = [value if value else "(빈 ID)" for value in duplicate_ids]
+        base_app.st.error(
+            "중복되거나 비어 있는 명세서ID가 발견되었습니다. "
+            "해당 명세서는 안전을 위해 삭제할 수 없습니다: "
+            + ", ".join(display_ids)
+        )
 
     detail = purchase.statement_detail_frame(statements, statement_items)
     detail = detail.sort_values(
@@ -62,11 +108,17 @@ def page_statement_list_with_detail():
 
     base_app.st.dataframe(summary, use_container_width=True, hide_index=True)
 
-    ids = detail["명세서ID"].astype(str).tolist()
-    row_map = detail.set_index(detail["명세서ID"].astype(str)).to_dict("index")
+    ids = detail["명세서ID"].astype(str).str.strip().tolist()
+    unique_ids = list(dict.fromkeys(ids))
+    row_map = {}
+    for _, row in detail.iterrows():
+        sid = str(row.get("명세서ID", "")).strip()
+        if sid not in row_map:
+            row_map[sid] = row.to_dict()
+
     selected_id = base_app.st.selectbox(
         "상세 확인할 거래명세서",
-        ids,
+        unique_ids,
         format_func=lambda sid: (
             f'[{row_map[sid].get("거래처명", "")}] '
             f'{row_map[sid].get("명세서번호", "")}번 | '
@@ -76,7 +128,7 @@ def page_statement_list_with_detail():
 
     header = row_map[selected_id]
     items = statement_items[
-        statement_items["명세서ID"].astype(str) == str(selected_id)
+        statement_items["명세서ID"].astype(str).str.strip() == str(selected_id).strip()
     ].copy()
 
     base_app.st.markdown("### 거래명세서 상세")
@@ -101,19 +153,35 @@ def page_statement_list_with_detail():
         })
         base_app.st.dataframe(item_view, use_container_width=True, hide_index=True)
 
+    selected_count = int(
+        (statements["명세서ID"].astype(str).str.strip() == str(selected_id).strip()).sum()
+    )
+    safe_to_delete = bool(selected_id) and selected_count == 1
+
     base_app.st.markdown("### 거래명세서 삭제")
+    if not safe_to_delete:
+        base_app.st.error(
+            "선택한 명세서ID가 중복되었거나 비어 있어 삭제할 수 없습니다. "
+            "다른 거래명세서가 함께 삭제되는 것을 방지하기 위한 안전장치입니다."
+        )
+
     confirm = base_app.st.checkbox(
-        "선택한 거래명세서를 삭제합니다.",
+        "선택한 거래명세서 1건만 삭제합니다.",
         key=f"delete_statement_confirm_{selected_id}",
+        disabled=not safe_to_delete,
     )
     if base_app.st.button(
         "선택한 거래명세서 삭제",
         type="primary",
         use_container_width=True,
-        disabled=not confirm,
+        disabled=(not confirm) or (not safe_to_delete),
     ):
-        delete_statement(selected_id)
-        base_app.st.success("거래명세서와 연결된 품목 및 가격이력을 삭제했습니다.")
+        try:
+            delete_statement(selected_id)
+        except ValueError as exc:
+            base_app.st.error(str(exc))
+            return
+        base_app.st.success("선택한 거래명세서 1건과 연결 품목 및 가격이력만 삭제했습니다.")
         base_app.st.rerun()
 
 
