@@ -1,68 +1,118 @@
-"""발주 화면 제품명 직접검색 결과가 검색어를 별칭처럼 표시하는 문제를 수정하는 실행 런처."""
+"""발주 검색 기본값과 대량 제품 검색 속도를 개선하는 실행 런처."""
 
 import pandas as pd
 
 import app_purchase_management as purchase
 
 base_app = purchase.base_app
+ORIGINAL_TEXT_INPUT = base_app.st.text_input
+
+
+def text_input_without_default_sample(label, *args, **kwargs):
+    """발주 검색창의 예시값 '마취크림'을 실제 입력값으로 사용하지 않습니다."""
+    if label == "검색" and kwargs.get("value") == "마취크림":
+        kwargs["value"] = ""
+        kwargs.setdefault("key", "product_search_keyword")
+    return ORIGINAL_TEXT_INPUT(label, *args, **kwargs)
+
+
+def _empty_result():
+    return pd.DataFrame(columns=[
+        "별칭(검색어)", "제품코드", "정식제품명", "규격", "단위", "점수", "매칭구분"
+    ])
 
 
 def search_products(keyword, vendor_name, products, aliases):
-    """제품 검색 결과에서 실제 별칭과 제품명 직접검색을 구분합니다.
-
-    기존 검색 함수는 제품명으로 직접 검색된 결과의 '별칭(검색어)' 값에 현재 검색창
-    입력값을 넣었습니다. 그래서 기본 검색어가 '마취크림'인 상태에서 새 제품이
-    제품명 유사검색으로 잡히면, 별칭 관리에 연결이 없어도 전부 마취크림 별칭처럼
-    보였습니다.
-    """
-    keyword = (keyword or "").strip()
-
+    """빠른 포함검색을 우선하고, 결과가 없을 때만 제한적으로 유사검색합니다."""
+    keyword = str(keyword or "").strip()
     if not keyword:
-        return pd.DataFrame()
+        return _empty_result()
 
-    rows = []
+    keyword_lower = keyword.casefold()
     active = products.copy().fillna("")
     alias_df = aliases.copy().fillna("")
     alias_df = alias_df[alias_df["거래처명"].isin([vendor_name, "전체", ""])]
 
-    # 1) 실제 별칭으로 매칭된 결과
-    for _, alias_row in alias_df.iterrows():
+    product_lookup = active.drop_duplicates("제품코드").set_index("제품코드", drop=False)
+    rows = []
+
+    # 1) 실제 별칭의 정확/포함 검색: 벡터 연산으로 빠르게 처리
+    if not alias_df.empty:
+        alias_text = alias_df["별칭"].astype(str).str.strip()
+        alias_mask = alias_text.str.casefold().str.contains(keyword_lower, regex=False, na=False)
+        for _, alias_row in alias_df[alias_mask].head(30).iterrows():
+            code = str(alias_row.get("제품코드", "")).strip()
+            if not code or code not in product_lookup.index:
+                continue
+            p = product_lookup.loc[code]
+            alias = str(alias_row.get("별칭", "")).strip()
+            rows.append({
+                "별칭(검색어)": alias,
+                "제품코드": p["제품코드"],
+                "정식제품명": p["정식제품명"],
+                "규격": p["규격"],
+                "단위": p["단위"],
+                "점수": 130 if alias.casefold() == keyword_lower else 110,
+                "매칭구분": "별칭",
+            })
+
+    # 2) 제품명/제품코드의 정확/포함 검색
+    product_name = active["정식제품명"].astype(str).str.strip()
+    product_code = active["제품코드"].astype(str).str.strip()
+    direct_mask = (
+        product_name.str.casefold().str.contains(keyword_lower, regex=False, na=False)
+        | product_code.str.casefold().str.contains(keyword_lower, regex=False, na=False)
+    )
+    for _, p in active[direct_mask].head(30).iterrows():
+        official = str(p.get("정식제품명", "")).strip()
+        code = str(p.get("제품코드", "")).strip()
+        exact = official.casefold() == keyword_lower or code.casefold() == keyword_lower
+        rows.append({
+            "별칭(검색어)": "제품명 직접검색",
+            "제품코드": p["제품코드"],
+            "정식제품명": p["정식제품명"],
+            "규격": p["규격"],
+            "단위": p["단위"],
+            "점수": 120 if exact else 100,
+            "매칭구분": "제품명",
+        })
+
+    # 포함검색 결과가 있으면 비싼 유사도 검색을 생략합니다.
+    if rows:
+        result = pd.DataFrame(rows)
+        result = result.sort_values(["점수", "매칭구분"], ascending=[False, True])
+        return result.drop_duplicates("제품코드", keep="first").head(30).reset_index(drop=True)
+
+    # 3) 오타 대응 유사검색: 검색어 2자 이상일 때만, 상위 후보만 계산
+    if len(keyword) < 2:
+        return _empty_result()
+
+    fuzzy_rows = []
+    for _, alias_row in alias_df.head(500).iterrows():
         alias = str(alias_row.get("별칭", "")).strip()
-        product_code = str(alias_row.get("제품코드", "")).strip()
-
-        if not alias or not product_code:
+        code = str(alias_row.get("제품코드", "")).strip()
+        if not alias or not code or code not in product_lookup.index:
             continue
-
         score = base_app.fuzz.partial_ratio(keyword, alias)
-        if keyword in alias:
-            score += 30
+        if score >= 70:
+            p = product_lookup.loc[code]
+            fuzzy_rows.append({
+                "별칭(검색어)": alias,
+                "제품코드": p["제품코드"],
+                "정식제품명": p["정식제품명"],
+                "규격": p["규격"],
+                "단위": p["단위"],
+                "점수": score + 10,
+                "매칭구분": "별칭",
+            })
 
-        if score >= 45:
-            product = active[active["제품코드"] == product_code]
-            if not product.empty:
-                p = product.iloc[0]
-                rows.append({
-                    "별칭(검색어)": alias,
-                    "제품코드": p["제품코드"],
-                    "정식제품명": p["정식제품명"],
-                    "규격": p["규격"],
-                    "단위": p["단위"],
-                    "점수": score + 10,
-                    "매칭구분": "별칭",
-                })
-
-    # 2) 제품명 자체로 매칭된 결과
-    for _, p in active.iterrows():
+    for _, p in active.head(1000).iterrows():
         official = str(p.get("정식제품명", "")).strip()
         if not official:
             continue
-
         score = base_app.fuzz.partial_ratio(keyword, official)
-        if keyword in official:
-            score += 30
-
-        if score >= 45:
-            rows.append({
+        if score >= 70:
+            fuzzy_rows.append({
                 "별칭(검색어)": "제품명 직접검색",
                 "제품코드": p["제품코드"],
                 "정식제품명": p["정식제품명"],
@@ -72,15 +122,15 @@ def search_products(keyword, vendor_name, products, aliases):
                 "매칭구분": "제품명",
             })
 
-    if not rows:
-        return pd.DataFrame()
+    if not fuzzy_rows:
+        return _empty_result()
 
-    result = pd.DataFrame(rows)
+    result = pd.DataFrame(fuzzy_rows)
     result = result.sort_values(["점수", "매칭구분"], ascending=[False, True])
-    result = result.drop_duplicates("제품코드", keep="first")
-    return result.reset_index(drop=True)
+    return result.drop_duplicates("제품코드", keep="first").head(30).reset_index(drop=True)
 
 
+base_app.st.text_input = text_input_without_default_sample
 base_app.search_products = search_products
 
 
