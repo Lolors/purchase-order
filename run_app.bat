@@ -1,4 +1,4 @@
 @echo off
 cd /d "%~dp0"
-python -m streamlit run app_alias_fix.py
+python -m streamlit run app_purchase_management.py
 pause
