@@ -22,8 +22,23 @@ def _empty_result():
     ])
 
 
+def _sort_results(rows):
+    """실제 별칭 일치 결과를 제품명 직접검색보다 항상 먼저 정렬합니다."""
+    if not rows:
+        return _empty_result()
+
+    result = pd.DataFrame(rows)
+    result["검색우선순위"] = result["매칭구분"].map({"별칭": 0, "제품명": 1}).fillna(2)
+    result = result.sort_values(
+        ["검색우선순위", "점수", "정식제품명"],
+        ascending=[True, False, True],
+    )
+    result = result.drop_duplicates("제품코드", keep="first").head(30)
+    return result.drop(columns=["검색우선순위"]).reset_index(drop=True)
+
+
 def search_products(keyword, vendor_name, products, aliases):
-    """빠른 포함검색을 우선하고, 결과가 없을 때만 제한적으로 유사검색합니다."""
+    """빠른 포함검색을 우선하고, 별칭 결과를 제품명 직접검색보다 먼저 보여줍니다."""
     keyword = str(keyword or "").strip()
     if not keyword:
         return _empty_result()
@@ -79,9 +94,7 @@ def search_products(keyword, vendor_name, products, aliases):
 
     # 포함검색 결과가 있으면 비싼 유사도 검색을 생략합니다.
     if rows:
-        result = pd.DataFrame(rows)
-        result = result.sort_values(["점수", "매칭구분"], ascending=[False, True])
-        return result.drop_duplicates("제품코드", keep="first").head(30).reset_index(drop=True)
+        return _sort_results(rows)
 
     # 3) 오타 대응 유사검색: 검색어 2자 이상일 때만, 상위 후보만 계산
     if len(keyword) < 2:
@@ -122,12 +135,7 @@ def search_products(keyword, vendor_name, products, aliases):
                 "매칭구분": "제품명",
             })
 
-    if not fuzzy_rows:
-        return _empty_result()
-
-    result = pd.DataFrame(fuzzy_rows)
-    result = result.sort_values(["점수", "매칭구분"], ascending=[False, True])
-    return result.drop_duplicates("제품코드", keep="first").head(30).reset_index(drop=True)
+    return _sort_results(fuzzy_rows)
 
 
 base_app.st.text_input = text_input_without_default_sample
