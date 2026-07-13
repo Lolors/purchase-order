@@ -4,9 +4,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import streamlit as st
+
 from repositories import purchase_repository
 
 
+@st.cache_resource(show_spinner=False)
 def build_application(base_dir: Path):
     # app_layers 안의 호환 모듈을 사용하는 Repository와 UI 모듈이 있으므로,
     # 관련 모듈을 import하기 전에 먼저 경로를 등록해야 합니다.
