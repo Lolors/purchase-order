@@ -43,6 +43,7 @@ def build_application(base_dir: Path):
 
         catalog_repo = CatalogRepository(core_app.DATA)
         draft_repo = DraftRepository(core_app.DATA)
+        draft_repo.migrate_legacy_csv_once()
         order_repo = OrderRepository(core_app.DATA, core_app)
 
         @core_app.st.cache_data(show_spinner=False)
