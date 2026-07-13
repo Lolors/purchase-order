@@ -5,18 +5,18 @@ import sys
 from pathlib import Path
 
 from repositories import purchase_repository
-from ui.pages.router import run as run_pages
 
 
 def build_application(base_dir: Path):
-    # app_layers 안의 호환 모듈을 사용하는 Repository가 있으므로,
-    # Repository를 import하기 전에 먼저 경로를 등록해야 합니다.
+    # app_layers 안의 호환 모듈을 사용하는 Repository와 UI 모듈이 있으므로,
+    # 관련 모듈을 import하기 전에 먼저 경로를 등록해야 합니다.
     layer_dir = base_dir / "app_layers"
     if str(layer_dir) not in sys.path:
         sys.path.insert(0, str(layer_dir))
 
     from repositories.catalog_repository import CatalogRepository
     from repositories.order_repository import OrderRepository
+    from ui.pages.router import run as run_pages
 
     import core_app
     sys.modules["app"] = core_app
@@ -75,11 +75,11 @@ def build_application(base_dir: Path):
 
         purchase.save_table = save_purchase_table
 
-    return core_app, purchase, db_status
+    return core_app, purchase, db_status, run_pages
 
 
 def run(base_dir: Path) -> None:
-    core_app, purchase, db_status = build_application(base_dir)
+    core_app, purchase, db_status, run_pages = build_application(base_dir)
 
     if not db_status.get("ok"):
         core_app.st.error(
