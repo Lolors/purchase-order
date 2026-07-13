@@ -21,6 +21,11 @@ import db_migration
 
 DB_STATUS = db_migration.initialize_database(core_app.DATA)
 
+# 2단계: 제품과 별칭의 읽기·저장을 SQLite로 전환합니다.
+if DB_STATUS.get("ok"):
+    import db_store
+    db_store.activate(core_app)
+
 import app_order_review as final_app
 
 
