@@ -18,6 +18,7 @@ def build_application(base_dir: Path):
         sys.path.insert(0, str(layer_dir))
 
     from repositories.catalog_repository import CatalogRepository
+    from repositories.draft_repository import DraftRepository
     from repositories.order_repository import OrderRepository
     from ui.pages.router import run as run_pages
     from ui.preview_layout import render_order_html
@@ -41,21 +42,17 @@ def build_application(base_dir: Path):
         import app_product_schema as product_schema
 
         catalog_repo = CatalogRepository(core_app.DATA)
+        draft_repo = DraftRepository(core_app.DATA)
         order_repo = OrderRepository(core_app.DATA, core_app)
-
-        draft_columns = ["임시ID", "작성일시", "거래처명", "요청사항", "상태", "총품목수", "총수량"]
-        draft_item_columns = ["임시ID", "순번", "제품코드", "정식제품명", "검색별칭", "규격", "단위", "수량"]
 
         @core_app.st.cache_data(show_spinner=False)
         def load_data_from_repositories():
-            # 임시저장만 아직 CSV이며, 나머지는 SQLite에서 읽습니다.
-            drafts = core_app.read_csv(core_app.DRAFTS_FILE, draft_columns)
-            draft_items = core_app.read_csv(core_app.DRAFT_ITEMS_FILE, draft_item_columns)
             vendors = catalog_repo.load_vendors()
             products = catalog_repo.load_products()
             products["정식제품명"] = products["제품명"]
             products["단위"] = products["포장단위"]
             aliases = catalog_repo.load_aliases()
+            drafts, draft_items = draft_repo.load_all()
             orders, order_items = order_repo.load_all()
             return vendors, products, aliases, drafts, draft_items, orders, order_items
 
@@ -91,16 +88,13 @@ def build_application(base_dir: Path):
             order_repo.delete(order_id)
             clear_data_cache()
 
-        original_save_draft = core_app.save_draft
-        original_delete_draft = core_app.delete_draft
-
         def save_draft(vendor_name, request_note, items):
-            draft_id = original_save_draft(vendor_name, request_note, items)
+            draft_id = draft_repo.save(vendor_name, request_note, items)
             clear_data_cache()
             return draft_id
 
         def delete_draft(draft_id):
-            original_delete_draft(draft_id)
+            draft_repo.delete(draft_id)
             clear_data_cache()
 
         core_app.load_data = load_data_from_repositories
