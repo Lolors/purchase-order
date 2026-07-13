@@ -11,11 +11,13 @@ from db_migration import normalize_product_code
 
 DRAFT_COLUMNS = ["임시ID", "작성일시", "거래처명", "요청사항", "상태", "총품목수", "총수량"]
 DRAFT_ITEM_COLUMNS = ["임시ID", "순번", "제품코드", "정식제품명", "검색별칭", "규격", "단위", "수량"]
+DRAFT_MIGRATION_KEY = "draft_csv_migration_v2"
 
 
 class DraftRepository:
     def __init__(self, data_dir: Path):
-        self.db_path = Path(data_dir) / "purchase_order.db"
+        self.data_dir = Path(data_dir)
+        self.db_path = self.data_dir / "purchase_order.db"
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10)
@@ -30,6 +32,93 @@ class DraftRepository:
             return int(float(str(value or "0").replace(",", "")))
         except (TypeError, ValueError):
             return 0
+
+    @staticmethod
+    def _read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
+        if not path.exists():
+            return pd.DataFrame(columns=columns)
+        frame = pd.read_csv(path, dtype=str, keep_default_na=False).fillna("")
+        for column in columns:
+            if column not in frame.columns:
+                frame[column] = ""
+        return frame[columns]
+
+    def migrate_legacy_csv_once(self) -> bool:
+        """최초 DB 전환 뒤 CSV에 추가된 임시저장 데이터를 한 번만 병합합니다."""
+        drafts = self._read_csv(self.data_dir / "drafts.csv", DRAFT_COLUMNS)
+        draft_items = self._read_csv(self.data_dir / "draft_items.csv", DRAFT_ITEM_COLUMNS)
+
+        with self._connect() as conn:
+            marker = conn.execute(
+                "SELECT value FROM app_metadata WHERE key = ?",
+                (DRAFT_MIGRATION_KEY,),
+            ).fetchone()
+            if marker:
+                return False
+
+            conn.execute("BEGIN IMMEDIATE")
+            draft_ids = []
+            for _, row in drafts.iterrows():
+                draft_id = str(row.get("임시ID", "") or "").strip()
+                if not draft_id:
+                    continue
+                draft_ids.append(draft_id)
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO drafts(
+                        draft_id, created_at, vendor_name, request_note, status,
+                        total_item_count, total_quantity
+                    ) VALUES(?,?,?,?,?,?,?)
+                    """,
+                    (
+                        draft_id,
+                        str(row.get("작성일시", "") or ""),
+                        str(row.get("거래처명", "") or ""),
+                        str(row.get("요청사항", "") or ""),
+                        str(row.get("상태", "") or "임시저장"),
+                        self._to_int(row.get("총품목수", 0)),
+                        self._to_int(row.get("총수량", 0)),
+                    ),
+                )
+
+            for draft_id in set(draft_ids):
+                conn.execute("DELETE FROM draft_items WHERE draft_id = ?", (draft_id,))
+
+            rows = []
+            for _, row in draft_items.iterrows():
+                draft_id = str(row.get("임시ID", "") or "").strip()
+                if not draft_id:
+                    continue
+                rows.append(
+                    (
+                        draft_id,
+                        self._to_int(row.get("순번", 0)),
+                        normalize_product_code(row.get("제품코드", "")),
+                        str(row.get("정식제품명", "") or ""),
+                        str(row.get("검색별칭", "") or ""),
+                        str(row.get("규격", "") or ""),
+                        str(row.get("단위", "") or ""),
+                        self._to_int(row.get("수량", 0)),
+                    )
+                )
+            if rows:
+                conn.executemany(
+                    """
+                    INSERT INTO draft_items(
+                        draft_id, sequence, product_code, product_name, search_alias,
+                        specification, packaging_unit, quantity
+                    ) VALUES(?,?,?,?,?,?,?,?)
+                    """,
+                    rows,
+                )
+
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                "INSERT OR REPLACE INTO app_metadata(key,value,updated_at) VALUES(?,?,?)",
+                (DRAFT_MIGRATION_KEY, now, now),
+            )
+            conn.commit()
+        return True
 
     def load_all(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         with self._connect() as conn:
