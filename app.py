@@ -21,17 +21,16 @@ import db_migration
 
 DB_STATUS = db_migration.initialize_database(core_app.DATA)
 
-# 2단계: 제품과 별칭의 공통 읽기·저장을 SQLite로 전환합니다.
-if DB_STATUS.get("ok"):
-    import db_store
-    db_store.activate(core_app)
-
+# 기능 모듈을 모두 불러온 뒤 DB 저장소를 최종 적용해야 CSV 함수가 다시 살아나지 않습니다.
 import app_order_review as final_app
 
-# 제품 관리 모듈은 자체 읽기·저장 함수를 사용하므로 해당 경로도 SQLite로 교체합니다.
 if DB_STATUS.get("ok"):
+    import db_store
     import app_product_schema as product_schema
 
+    db_store.activate(core_app)
+
+    # 제품 관리 모듈은 자체 읽기·저장 함수를 사용하므로 해당 경로도 SQLite로 교체합니다.
     def _read_products_from_db():
         return product_schema.products_for_app(db_store.load_products(core_app.DATA))
 
@@ -40,8 +39,15 @@ if DB_STATUS.get("ok"):
 
     product_schema.read_products_file = _read_products_from_db
     product_schema.save_products_with_schema = _save_products_to_db
+
+    # 최종 실행 시점에 다시 명시해 각 확장 모듈의 CSV 저장 함수보다 DB 함수를 우선합니다.
     core_app.save_products = _save_products_to_db
     core_app.save_aliases = lambda df: db_store.save_aliases(core_app.DATA, df)
+    core_app.save_vendors = lambda df: db_store.save_vendors(core_app.DATA, df)
+    core_app.save_order = lambda vendor_name, request_note, items: db_store.save_order(
+        core_app.DATA, core_app, vendor_name, request_note, items
+    )
+    core_app.delete_order = lambda order_id: db_store.delete_order(core_app.DATA, order_id)
 
 
 if __name__ == "__main__":
