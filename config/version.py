@@ -1,7 +1,7 @@
 """발주관리 시스템 버전 정책과 표시 문자열."""
 
 APP_NAME = "발주관리 시스템"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
 
 # 버전 규칙
