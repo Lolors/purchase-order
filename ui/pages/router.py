@@ -25,7 +25,7 @@ def run(core_app, purchase_module) -> None:
     routes = {
         "발주 작성": lambda: orders.write(core_app, data),
         "임시저장 목록": lambda: orders.drafts(core_app, data),
-        "발주서 목록": lambda: orders.order_list(core_app, data),
+        "발주서 목록": lambda: orders.order_list(core_app, data, purchase_module),
         "최근 발주 내역": lambda: orders.recent(core_app, data),
         "거래명세서 등록": lambda: purchases.register(purchase_module, data),
         "거래명세서 내역": lambda: purchases.statement_list(purchase_module, data),
