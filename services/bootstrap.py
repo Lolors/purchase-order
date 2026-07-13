@@ -1,19 +1,22 @@
-"""1.0.0 애플리케이션 조립과 기존 UI 호환 연결."""
+"""1.0.x 애플리케이션 조립과 기존 UI 호환 연결."""
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
 from repositories import purchase_repository
-from repositories.catalog_repository import CatalogRepository
-from repositories.order_repository import OrderRepository
 from ui.pages.router import run as run_pages
 
 
 def build_application(base_dir: Path):
+    # app_layers 안의 호환 모듈을 사용하는 Repository가 있으므로,
+    # Repository를 import하기 전에 먼저 경로를 등록해야 합니다.
     layer_dir = base_dir / "app_layers"
     if str(layer_dir) not in sys.path:
         sys.path.insert(0, str(layer_dir))
+
+    from repositories.catalog_repository import CatalogRepository
+    from repositories.order_repository import OrderRepository
 
     import core_app
     sys.modules["app"] = core_app
@@ -21,7 +24,7 @@ def build_application(base_dir: Path):
     import db_migration
     db_status = db_migration.initialize_database(core_app.DATA)
 
-    # 레거시 모듈은 아직 페이지 구현 제공자로만 사용합니다.
+    # 레거시 모듈은 아직 거래명세서 페이지 구현 제공자로만 사용합니다.
     import app_order_review as final_app
     purchase = final_app.purchase
 
