@@ -1,5 +1,7 @@
 """제품코드를 기준으로 별칭 연결을 안전하게 유지하는 별칭 관리 모듈."""
 
+import re
+
 import pandas as pd
 import streamlit as st
 
@@ -7,6 +9,26 @@ import app_pdf_png_flow as flow
 
 base_app = flow.base_app
 ALIAS_COLUMNS = ["거래처명", "별칭", "제품코드"]
+PRODUCT_CODE_WIDTH = 5
+
+
+def normalize_product_code(value):
+    """ERP 제품코드를 선행 0이 유지되는 5자리 문자열로 정리합니다."""
+    if value is None or pd.isna(value):
+        return ""
+
+    text = str(value).strip()
+    if not text:
+        return ""
+
+    # 엑셀에서 숫자로 읽힌 131.0 같은 값도 00131로 복원합니다.
+    if re.fullmatch(r"\d+\.0+", text):
+        text = text.split(".", 1)[0]
+
+    if text.isdigit():
+        return text.zfill(PRODUCT_CODE_WIDTH)
+
+    return text
 
 
 def normalize_alias_table(df):
@@ -26,8 +48,9 @@ def normalize_alias_table(df):
             clean[col] = ""
 
     clean = clean.fillna("")
-    for col in ALIAS_COLUMNS:
-        clean[col] = clean[col].astype(str).str.strip()
+    clean["거래처명"] = clean["거래처명"].astype(str).str.strip()
+    clean["별칭"] = clean["별칭"].astype(str).str.strip()
+    clean["제품코드"] = clean["제품코드"].map(normalize_product_code)
 
     clean = clean[(clean["별칭"] != "") & (clean["제품코드"] != "")]
     return clean[ALIAS_COLUMNS].reset_index(drop=True)
@@ -41,11 +64,16 @@ def _product_lookup(products):
     if "단위" not in product_df.columns:
         product_df["단위"] = product_df.get("포장단위", "")
 
-    for col in ["제품코드", "정식제품명", "규격", "단위"]:
+    for col in ["정식제품명", "규격", "단위"]:
         if col not in product_df.columns:
             product_df[col] = ""
         product_df[col] = product_df[col].astype(str).str.strip()
 
+    if "제품코드" not in product_df.columns:
+        product_df["제품코드"] = ""
+    product_df["제품코드"] = product_df["제품코드"].map(normalize_product_code)
+
+    product_df = product_df[product_df["제품코드"] != ""]
     product_df = product_df.drop_duplicates("제품코드", keep="last")
     return product_df.set_index("제품코드", drop=False)
 
@@ -77,10 +105,11 @@ def page_alias_manage(vendors, products, aliases):
             elif not selected_product_code:
                 st.warning("연결할 제품을 선택하세요.")
             else:
+                normalized_code = normalize_product_code(selected_product_code)
                 duplicate = aliases[
                     (aliases["거래처명"] == selected_vendor)
                     & (aliases["별칭"] == new_alias.strip())
-                    & (aliases["제품코드"] == str(selected_product_code))
+                    & (aliases["제품코드"] == normalized_code)
                 ]
                 if not duplicate.empty:
                     st.warning("이미 등록된 별칭입니다.")
@@ -88,9 +117,9 @@ def page_alias_manage(vendors, products, aliases):
                     new_row = pd.DataFrame([{
                         "거래처명": selected_vendor,
                         "별칭": new_alias.strip(),
-                        "제품코드": str(selected_product_code),
+                        "제품코드": normalized_code,
                     }])
-                    base_app.save_aliases(pd.concat([aliases, new_row], ignore_index=True))
+                    base_app.save_aliases(normalize_alias_table(pd.concat([aliases, new_row], ignore_index=True)))
                     st.success("별칭을 추가했습니다.")
                     st.rerun()
 
@@ -120,6 +149,7 @@ def page_alias_manage(vendors, products, aliases):
         column_config={
             "삭제": st.column_config.CheckboxColumn("삭제"),
             "거래처명": st.column_config.SelectboxColumn("거래처명", options=vendor_options),
+            "제품코드": st.column_config.TextColumn("제품코드"),
         },
         key="alias_editor_product_code_link",
     )
