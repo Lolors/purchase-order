@@ -39,10 +39,15 @@ def build_application(base_dir: Path):
 
         catalog_repo = CatalogRepository(core_app.DATA)
         order_repo = OrderRepository(core_app.DATA, core_app)
-        original_load_data = core_app.load_data
 
+        draft_columns = ["임시ID", "작성일시", "거래처명", "요청사항", "상태", "총품목수", "총수량"]
+        draft_item_columns = ["임시ID", "순번", "제품코드", "정식제품명", "검색별칭", "규격", "단위", "수량"]
+
+        @core_app.st.cache_data(show_spinner=False)
         def load_data_from_repositories():
-            _, _, _, drafts, draft_items, _, _ = original_load_data()
+            # 임시저장만 아직 CSV이며, 나머지는 SQLite에서 읽습니다.
+            drafts = core_app.read_csv(core_app.DRAFTS_FILE, draft_columns)
+            draft_items = core_app.read_csv(core_app.DRAFT_ITEMS_FILE, draft_item_columns)
             vendors = catalog_repo.load_vendors()
             products = catalog_repo.load_products()
             products["정식제품명"] = products["제품명"]
@@ -51,20 +56,63 @@ def build_application(base_dir: Path):
             orders, order_items = order_repo.load_all()
             return vendors, products, aliases, drafts, draft_items, orders, order_items
 
+        @core_app.st.cache_data(show_spinner=False)
+        def load_purchase_data_cached():
+            return purchase_repository.load_all(core_app.DATA)
+
+        def clear_data_cache() -> None:
+            load_data_from_repositories.clear()
+            load_purchase_data_cached.clear()
+
         def read_products_from_db():
             return product_schema.products_for_app(catalog_repo.load_products())
 
+        def save_products(products):
+            catalog_repo.save_products(products)
+            clear_data_cache()
+
+        def save_aliases(aliases):
+            catalog_repo.save_aliases(aliases)
+            clear_data_cache()
+
+        def save_vendors(vendors):
+            catalog_repo.save_vendors(vendors)
+            clear_data_cache()
+
+        def save_order(vendor_name, request_note, items):
+            order_id = order_repo.save(vendor_name, request_note, items)
+            clear_data_cache()
+            return order_id
+
+        def delete_order(order_id):
+            order_repo.delete(order_id)
+            clear_data_cache()
+
+        original_save_draft = core_app.save_draft
+        original_delete_draft = core_app.delete_draft
+
+        def save_draft(vendor_name, request_note, items):
+            draft_id = original_save_draft(vendor_name, request_note, items)
+            clear_data_cache()
+            return draft_id
+
+        def delete_draft(draft_id):
+            original_delete_draft(draft_id)
+            clear_data_cache()
+
         core_app.load_data = load_data_from_repositories
         product_schema.read_products_file = read_products_from_db
-        product_schema.save_products_with_schema = catalog_repo.save_products
+        product_schema.save_products_with_schema = save_products
 
-        core_app.save_products = catalog_repo.save_products
-        core_app.save_aliases = catalog_repo.save_aliases
-        core_app.save_vendors = catalog_repo.save_vendors
-        core_app.save_order = order_repo.save
-        core_app.delete_order = order_repo.delete
+        core_app.save_products = save_products
+        core_app.save_aliases = save_aliases
+        core_app.save_vendors = save_vendors
+        core_app.save_order = save_order
+        core_app.delete_order = delete_order
+        core_app.save_draft = save_draft
+        core_app.delete_draft = delete_draft
 
-        purchase.load_purchase_data = lambda: purchase_repository.load_all(core_app.DATA)
+        purchase.load_purchase_data = load_purchase_data_cached
 
         def save_purchase_table(path, df, columns):
             filename = Path(path).name
@@ -78,6 +126,7 @@ def build_application(base_dir: Path):
                 purchase_repository.replace_monthly_closes(core_app.DATA, df)
             else:
                 raise ValueError(f"지원하지 않는 매입 데이터 저장 대상입니다: {filename}")
+            clear_data_cache()
 
         purchase.save_table = save_purchase_table
 
