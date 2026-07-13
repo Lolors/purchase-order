@@ -4,10 +4,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from config import APP_TITLE
 from repositories import purchase_repository
 from repositories.catalog_repository import CatalogRepository
 from repositories.order_repository import OrderRepository
+from ui.pages.router import run as run_pages
 
 
 def build_application(base_dir: Path):
@@ -21,8 +21,9 @@ def build_application(base_dir: Path):
     import db_migration
     db_status = db_migration.initialize_database(core_app.DATA)
 
-    # 기존 화면 체인은 아직 유지하되 데이터 접근은 Repository로 주입합니다.
+    # 레거시 모듈은 아직 페이지 구현 제공자로만 사용합니다.
     import app_order_review as final_app
+    purchase = final_app.purchase
 
     if db_status.get("ok"):
         import app_product_schema as product_schema
@@ -54,7 +55,6 @@ def build_application(base_dir: Path):
         core_app.save_order = order_repo.save
         core_app.delete_order = order_repo.delete
 
-        purchase = final_app.purchase
         purchase.load_purchase_data = lambda: purchase_repository.load_all(core_app.DATA)
 
         def save_purchase_table(path, df, columns):
@@ -72,12 +72,11 @@ def build_application(base_dir: Path):
 
         purchase.save_table = save_purchase_table
 
-    return core_app, final_app, db_status
+    return core_app, purchase, db_status
 
 
 def run(base_dir: Path) -> None:
-    core_app, final_app, db_status = build_application(base_dir)
-    core_app.st.sidebar.caption(APP_TITLE)
+    core_app, purchase, db_status = build_application(base_dir)
 
     if not db_status.get("ok"):
         core_app.st.error(
@@ -87,4 +86,4 @@ def run(base_dir: Path) -> None:
     elif db_status.get("migrated"):
         core_app.st.toast("기존 CSV 데이터를 SQLite DB로 안전하게 이전했습니다.", icon="✅")
 
-    final_app.purchase.main()
+    run_pages(core_app, purchase)
