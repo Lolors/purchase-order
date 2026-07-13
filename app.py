@@ -21,12 +21,27 @@ import db_migration
 
 DB_STATUS = db_migration.initialize_database(core_app.DATA)
 
-# 2단계: 제품과 별칭의 읽기·저장을 SQLite로 전환합니다.
+# 2단계: 제품과 별칭의 공통 읽기·저장을 SQLite로 전환합니다.
 if DB_STATUS.get("ok"):
     import db_store
     db_store.activate(core_app)
 
 import app_order_review as final_app
+
+# 제품 관리 모듈은 자체 읽기·저장 함수를 사용하므로 해당 경로도 SQLite로 교체합니다.
+if DB_STATUS.get("ok"):
+    import app_product_schema as product_schema
+
+    def _read_products_from_db():
+        return product_schema.products_for_app(db_store.load_products(core_app.DATA))
+
+    def _save_products_to_db(df):
+        db_store.save_products(core_app.DATA, df)
+
+    product_schema.read_products_file = _read_products_from_db
+    product_schema.save_products_with_schema = _save_products_to_db
+    core_app.save_products = _save_products_to_db
+    core_app.save_aliases = lambda df: db_store.save_aliases(core_app.DATA, df)
 
 
 if __name__ == "__main__":
