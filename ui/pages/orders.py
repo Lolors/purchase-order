@@ -16,13 +16,14 @@ def _normalise_items(core_app, rows: pd.DataFrame) -> list[dict]:
         return []
     result = []
     for _, row in rows.iterrows():
+        unit = str(row.get("단위", row.get("포장단위", "")) or "")
         result.append({
             "제품코드": str(row.get("제품코드", "") or ""),
             "정식제품명": str(row.get("정식제품명", row.get("제품명", "")) or ""),
             "검색별칭": str(row.get("검색별칭", "") or ""),
             "규격": str(row.get("규격", "") or ""),
-            "단위": str(row.get("단위", row.get("포장단위", "")) or ""),
-            "포장단위": str(row.get("포장단위", row.get("단위", "")) or ""),
+            "단위": unit,
+            "포장단위": unit,
             "수량": core_app.safe_int(row.get("수량", 0)),
         })
     return result
@@ -32,10 +33,9 @@ def _add_or_merge_item(items: list[dict], new_item: dict) -> list[dict]:
     code = str(new_item.get("제품코드", "") or "")
     name = str(new_item.get("정식제품명", "") or "")
     for item in items:
-        if code and str(item.get("제품코드", "")) == code:
-            item["수량"] = int(item.get("수량", 0)) + int(new_item.get("수량", 0))
-            return items
-        if not code and str(item.get("정식제품명", "")) == name:
+        same_code = code and str(item.get("제품코드", "")) == code
+        same_name = not code and str(item.get("정식제품명", "")) == name
+        if same_code or same_name:
             item["수량"] = int(item.get("수량", 0)) + int(new_item.get("수량", 0))
             return items
     items.append(new_item)
@@ -96,7 +96,10 @@ def write(core_app, data) -> None:
             if keyword and result.empty:
                 st.warning("검색 결과가 없습니다.")
             elif not result.empty:
-                view_cols = [c for c in ["별칭(검색어)", "정식제품명", "제품코드", "규격", "단위"] if c in result.columns]
+                view_cols = [
+                    c for c in ["별칭(검색어)", "정식제품명", "제품코드", "규격", "단위"]
+                    if c in result.columns
+                ]
                 st.dataframe(result[view_cols].head(30), use_container_width=True, hide_index=True, height=180)
                 selected_index = st.selectbox(
                     "제품 선택",
@@ -108,8 +111,10 @@ def write(core_app, data) -> None:
 
             if selected is not None:
                 c1, c2 = st.columns([3, 1])
-                c1.markdown(f'**{selected.get("정식제품명", "")}**  
-{selected.get("규격", "")} / {selected.get("단위", "")}')
+                c1.markdown(
+                    f'**{selected.get("정식제품명", "")}**  \n'
+                    f'{selected.get("규격", "")} / {selected.get("단위", "")}'
+                )
                 qty = c2.number_input("수량", min_value=1, value=1, step=1, key="order_add_qty")
                 if st.button("선택 제품 추가", type="primary", use_container_width=True):
                     item = {
@@ -159,8 +164,16 @@ def write(core_app, data) -> None:
                 st.caption(f"총 {count:,}개 품목 / 총 수량 {total:,}")
 
         with st.container(border=True):
-            order_date = st.date_input("발주일자", value=st.session_state.get("order_date", datetime.now().date()), key="order_date")
-            request_note = st.text_area("요청사항", value=st.session_state.get("loaded_request_note", ""), key="order_request_note")
+            order_date = st.date_input(
+                "발주일자",
+                value=st.session_state.get("order_date", datetime.now().date()),
+                key="order_date",
+            )
+            request_note = st.text_area(
+                "요청사항",
+                value=st.session_state.get("loaded_request_note", ""),
+                key="order_request_note",
+            )
             c1, c2, c3 = st.columns(3)
             if c1.button("임시저장", use_container_width=True):
                 draft_id = core_app.save_draft(vendor_name, request_note, st.session_state.order_items)
@@ -171,13 +184,22 @@ def write(core_app, data) -> None:
                 else:
                     order_id = core_app.save_order(vendor_name, request_note, st.session_state.order_items)
                     st.success(f"발주 완료: {order_id}")
-            export_path = core_app.create_excel(vendor, st.session_state.order_items, request_note, order_date.strftime("%Y-%m-%d"))
+            export_path = core_app.create_excel(
+                vendor,
+                st.session_state.order_items,
+                request_note,
+                order_date.strftime("%Y-%m-%d"),
+            )
             with open(export_path, "rb") as file:
                 c3.download_button("엑셀 저장", file, file_name=Path(export_path).name, use_container_width=True)
 
         if not drafts_df.empty:
             with st.expander("임시저장 불러오기"):
-                draft_id = st.selectbox("임시저장", drafts_df["임시ID"].astype(str).tolist(), key="order_draft_pick")
+                draft_id = st.selectbox(
+                    "임시저장",
+                    drafts_df["임시ID"].astype(str).tolist(),
+                    key="order_draft_pick",
+                )
                 if st.button("선택 임시저장 불러오기", key="order_load_draft"):
                     header = drafts_df[drafts_df["임시ID"].astype(str) == draft_id].iloc[0]
                     rows = draft_items[draft_items["임시ID"].astype(str) == draft_id]
@@ -188,11 +210,12 @@ def write(core_app, data) -> None:
 
     with right:
         with st.container(border=True):
+            preview_date = st.session_state.get("order_date", datetime.now().date())
             core_app.render_purchase_preview(
                 vendor,
                 st.session_state.order_items,
                 st.session_state.get("order_request_note", ""),
-                st.session_state.get("order_date", datetime.now().date()).strftime("%Y-%m-%d"),
+                preview_date.strftime("%Y-%m-%d"),
             )
 
 
@@ -238,11 +261,15 @@ def _receipt_review(core_app, purchase_module, order_id: str, order_items: pd.Da
     statements, statement_items, _, _ = purchase_module.load_purchase_data()
     linked = statements[statements["발주ID"].astype(str) == str(order_id)] if not statements.empty else statements
     linked_ids = linked["명세서ID"].astype(str).tolist() if not linked.empty else []
-    received_rows = statement_items[statement_items["명세서ID"].astype(str).isin(linked_ids)] if linked_ids else statement_items.iloc[0:0]
+    received_rows = (
+        statement_items[statement_items["명세서ID"].astype(str).isin(linked_ids)]
+        if linked_ids else statement_items.iloc[0:0]
+    )
     received = {}
     for _, row in received_rows.iterrows():
         key = _item_key(row)
         received[key] = received.get(key, 0) + purchase_module.to_int(row.get("입고수량", 0))
+
     review_rows = []
     for _, row in order_items.iterrows():
         ordered_qty = purchase_module.to_int(row.get("수량", 0))
@@ -263,11 +290,13 @@ def _receipt_review(core_app, purchase_module, order_id: str, order_items: pd.Da
             "거래명세서 확인수량": received_qty,
             "상태": status,
         })
+
     review = pd.DataFrame(review_rows)
     st.markdown("### 입고 검수 요약")
     if review.empty:
         st.info("발주 품목이 없습니다.")
         return
+
     partial = review.loc[review["상태"] == "입고가 덜 됨", "제품명"].astype(str).tolist()
     missing = review.loc[review["상태"] == "미입고", "제품명"].astype(str).tolist()
     over = review.loc[review["상태"] == "초과입고", "제품명"].astype(str).tolist()
@@ -293,6 +322,7 @@ def order_list(core_app, data, purchase_module=None) -> None:
     if headers.empty:
         st.info("발주서가 없습니다.")
         return
+
     st.dataframe(headers, use_container_width=True, hide_index=True)
     vendor_map = headers.set_index("발주ID")["거래처명"].astype(str).to_dict()
     selected = st.selectbox(
@@ -305,6 +335,7 @@ def order_list(core_app, data, purchase_module=None) -> None:
     if not detail.empty:
         cols = [c for c in ["제품코드", "정식제품명", "규격", "단위", "수량"] if c in detail.columns]
         st.dataframe(detail[cols], use_container_width=True, hide_index=True)
+
     c1, c2, c3 = st.columns(3)
     if c1.button("복사하여 새 발주", use_container_width=True):
         st.session_state.order_items = _normalise_items(core_app, detail)
@@ -316,11 +347,17 @@ def order_list(core_app, data, purchase_module=None) -> None:
         core_app.delete_order(selected)
         st.success("발주서와 연결 데이터가 삭제되었습니다.")
         st.rerun()
+
     vendor_row = vendors[vendors["거래처명"].astype(str) == str(header.get("거래처명", ""))]
     if not vendor_row.empty:
-        export = core_app.create_excel(vendor_row.iloc[0], _normalise_items(core_app, detail), header.get("요청사항", ""))
+        export = core_app.create_excel(
+            vendor_row.iloc[0],
+            _normalise_items(core_app, detail),
+            header.get("요청사항", ""),
+        )
         with open(export, "rb") as file:
             c3.download_button("엑셀 다운로드", file, file_name=Path(export).name, use_container_width=True)
+
     if purchase_module is not None:
         _receipt_review(core_app, purchase_module, selected, detail)
 
