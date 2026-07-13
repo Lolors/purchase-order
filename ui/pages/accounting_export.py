@@ -1,4 +1,4 @@
-"""경리부 공유용 월마감 조회와 엑셀 내보내기."""
+"""월마감 조회와 엑셀 내보내기."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -170,7 +170,7 @@ def _excel_bytes(month_key: str, summary: pd.DataFrame, detail: pd.DataFrame, ve
 def render(purchase_module, data) -> None:
     st = purchase_module.st
     st.markdown("## 월별 매입 현황")
-    st.caption("거래명세서 일자 기준으로 경리부 공유용 월마감 자료를 조회하고 내려받습니다.")
+    st.caption("거래명세서 일자 기준으로 월마감 자료를 조회하고 내려받습니다.")
 
     today = datetime.now()
     c1, c2 = st.columns(2)
@@ -205,7 +205,7 @@ def render(purchase_module, data) -> None:
     st.dataframe(vendor_display, use_container_width=True, hide_index=True)
 
     st.download_button(
-        "경리부 공유용 월마감 엑셀 내려받기",
+        "월마감 엑셀 내려받기",
         data=_excel_bytes(month_key, summary, detail, vendor),
         file_name=f"월마감_매입자료_{month_key}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
