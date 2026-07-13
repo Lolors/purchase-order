@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from ui.navigation import render_sidebar
-from ui.pages import catalog, orders, purchases
+from ui.pages import catalog, order_write, orders, purchases
 
 
 def run(core_app, purchase_module) -> None:
@@ -23,7 +23,7 @@ def run(core_app, purchase_module) -> None:
     page = render_sidebar(core_app.st)
 
     routes = {
-        "발주 작성": lambda: orders.write(core_app, data),
+        "발주 작성": lambda: order_write.render(core_app, data),
         "임시저장 목록": lambda: orders.drafts(core_app, data),
         "발주서 목록": lambda: orders.order_list(core_app, data, purchase_module),
         "최근 발주 내역": lambda: orders.recent(core_app, data),
