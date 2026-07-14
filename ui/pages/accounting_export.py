@@ -48,10 +48,14 @@ def _build_frames(purchase_module, data, year: int, month: int):
             order_dates[str(row.get("발주ID", ""))] = _date_text(row.get("발주일시", ""))
 
     summary_rows = []
-    item_rows = []
+    detail_rows = []
     for _, statement in working.sort_values(["명세서일자", "등록일시"]).iterrows():
         statement_id = str(statement.get("명세서ID", ""))
         order_id = str(statement.get("발주ID", ""))
+        vendor_name = str(statement.get("거래처명", ""))
+        statement_number = str(statement.get("명세서번호", ""))
+        statement_date = _date_text(statement.get("명세서일자", ""))
+        order_date = order_dates.get(order_id, "")
         items = statement_items[
             statement_items["명세서ID"].astype(str) == statement_id
         ].copy()
@@ -64,27 +68,42 @@ def _build_frames(purchase_module, data, year: int, month: int):
             amount = _to_int(purchase_module, item.get("상품금액", qty * buy_price))
             item_qty += qty
             product_amount += amount
-            item_rows.append({
-                "거래처": str(statement.get("거래처명", "")),
-                "발주일자": order_dates.get(order_id, ""),
+            detail_rows.append({
+                "거래처": vendor_name,
+                "발주일자": order_date,
                 "발주번호": order_id,
-                "거래명세서 번호": str(statement.get("명세서번호", "")),
-                "거래명세서 일자": _date_text(statement.get("명세서일자", "")),
+                "거래명세서 번호": statement_number,
+                "거래명세서 일자": statement_date,
                 "정식제품명": str(item.get("정식제품명", "")),
                 "규격": str(item.get("규격", "")),
                 "수량": qty,
                 "포장단위": str(item.get("포장단위", "") or item.get("단위", "")),
                 "매입단가": buy_price,
-                "상품금액": amount,
+                "금액": amount,
             })
 
         freight = _to_int(purchase_module, statement.get("운송비", 0))
+        if freight:
+            detail_rows.append({
+                "거래처": vendor_name,
+                "발주일자": order_date,
+                "발주번호": order_id,
+                "거래명세서 번호": statement_number,
+                "거래명세서 일자": statement_date,
+                "정식제품명": "배송비",
+                "규격": "",
+                "수량": "",
+                "포장단위": "",
+                "매입단가": "",
+                "금액": freight,
+            })
+
         summary_rows.append({
-            "거래처": str(statement.get("거래처명", "")),
-            "발주일자": order_dates.get(order_id, ""),
+            "거래처": vendor_name,
+            "발주일자": order_date,
             "발주번호": order_id,
-            "거래명세서 번호": str(statement.get("명세서번호", "")),
-            "거래명세서 일자": _date_text(statement.get("명세서일자", "")),
+            "거래명세서 번호": statement_number,
+            "거래명세서 일자": statement_date,
             "품목 수": len(items),
             "입고수량 합계": item_qty,
             "상품금액": product_amount,
@@ -93,7 +112,7 @@ def _build_frames(purchase_module, data, year: int, month: int):
         })
 
     summary = pd.DataFrame(summary_rows)
-    detail = pd.DataFrame(item_rows)
+    detail = pd.DataFrame(detail_rows)
     vendor = (
         summary.groupby("거래처", as_index=False)
         .agg(
@@ -108,21 +127,38 @@ def _build_frames(purchase_module, data, year: int, month: int):
     return summary, detail, vendor
 
 
+def _total_row(frame: pd.DataFrame, sum_columns: set[str]) -> dict:
+    row = {column: "" for column in frame.columns}
+    if len(frame.columns):
+        row[frame.columns[0]] = "합계"
+    for column in sum_columns:
+        if column in frame.columns:
+            row[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0).sum()
+    return row
+
+
 def _excel_bytes(month_key: str, summary: pd.DataFrame, detail: pd.DataFrame, vendor: pd.DataFrame) -> bytes:
     output = BytesIO()
     wb = Workbook()
     wb.remove(wb.active)
 
-    def add_sheet(name: str, frame: pd.DataFrame, money_columns: set[str]):
+    def add_sheet(
+        name: str,
+        frame: pd.DataFrame,
+        money_columns: set[str],
+        sum_columns: set[str],
+        header_row: int = 1,
+    ):
         ws = wb.create_sheet(name)
         headers = list(frame.columns)
         for col_idx, header in enumerate(headers, 1):
-            cell = ws.cell(1, col_idx, header)
+            cell = ws.cell(header_row, col_idx, header)
             cell.font = Font(bold=True)
             cell.fill = PatternFill("solid", fgColor="E8EEF7")
             cell.alignment = Alignment(horizontal="center")
 
-        for row_idx, row in enumerate(frame.itertuples(index=False), 2):
+        data_start = header_row + 1
+        for row_idx, row in enumerate(frame.itertuples(index=False), data_start):
             for col_idx, value in enumerate(row, 1):
                 cell = ws.cell(row_idx, col_idx, value)
                 header = headers[col_idx - 1]
@@ -132,38 +168,53 @@ def _excel_bytes(month_key: str, summary: pd.DataFrame, detail: pd.DataFrame, ve
                     horizontal="left" if header in {"거래처", "정식제품명", "규격"} else "center"
                 )
 
+        total_row_index = data_start + len(frame)
+        total_values = _total_row(frame, sum_columns)
+        for col_idx, header in enumerate(headers, 1):
+            cell = ws.cell(total_row_index, col_idx, total_values.get(header, ""))
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill("solid", fgColor="F3F4F6")
+            if header in money_columns:
+                cell.number_format = "#,##0"
+            cell.alignment = Alignment(
+                horizontal="left" if col_idx == 1 else "center"
+            )
+
         for idx, header in enumerate(headers, 1):
             values = [str(header)] + [str(v) for v in frame.iloc[:, idx - 1].tolist()[:200]]
             width = min(max(len(v) for v in values) + 3, 38)
             ws.column_dimensions[get_column_letter(idx)].width = max(width, 12)
-        ws.freeze_panes = "A2"
-        ws.auto_filter.ref = ws.dimensions
 
-    add_sheet(
+        last_column = get_column_letter(max(1, len(headers)))
+        data_end = max(header_row, data_start + len(frame) - 1)
+        ws.auto_filter.ref = f"A{header_row}:{last_column}{data_end}"
+        ws.freeze_panes = f"A{header_row + 1}"
+        return ws
+
+    summary_ws = add_sheet(
         "월마감 요약",
         summary,
         {"상품금액", "배송비", "총 매입금액"},
+        {"입고수량 합계", "상품금액", "배송비", "총 매입금액"},
+        header_row=3,
     )
+    summary_ws["A1"] = f"{month_key}_메디풀_매입내역"
+    summary_ws["A1"].font = Font(size=16, bold=True)
+    summary_ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max(1, len(summary.columns)))
+    summary_ws["A1"].alignment = Alignment(horizontal="center")
+
     add_sheet(
         "품목 상세",
         detail,
-        {"매입단가", "상품금액"},
+        {"매입단가", "금액"},
+        {"수량", "금액"},
     )
     add_sheet(
         "거래처별 합계",
         vendor,
         {"상품금액", "배송비", "총매입금액"},
+        {"거래명세서수", "상품금액", "배송비", "총매입금액"},
     )
-
-    ws = wb["월마감 요약"]
-    ws.insert_rows(1, 2)
-    ws["A1"] = f"{month_key} 월마감 매입 자료"
-    ws["A1"].font = Font(size=16, bold=True)
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max(1, len(summary.columns)))
-    ws["A1"].alignment = Alignment(horizontal="center")
-    last_column = get_column_letter(max(1, len(summary.columns)))
-    ws.auto_filter.ref = f"A3:{last_column}{ws.max_row}"
-    ws.freeze_panes = "A4"
 
     wb.save(output)
     output.seek(0)
@@ -210,7 +261,7 @@ def render(purchase_module, data) -> None:
     st.download_button(
         "월마감 엑셀 내려받기",
         data=_excel_bytes(month_key, summary, detail, vendor),
-        file_name=f"월마감_매입자료_{month_key}.xlsx",
+        file_name=f"{month_key}_메디풀_매입내역.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary",
         use_container_width=True,
