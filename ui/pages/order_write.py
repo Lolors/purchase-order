@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from ui.export_cache import export_fingerprint, get_or_create_excel
 from ui.pages.orders import _add_or_merge_item, _normalise_items, _vendor_panel
 
 
@@ -24,6 +25,7 @@ def _reset_order_form_state(st) -> None:
     st.session_state["order_request_note"] = ""
     st.session_state["order_add_qty"] = 1
     st.session_state["order_date"] = datetime.now().date()
+    st.session_state.pop("order_excel_export", None)
     for key in _ORDER_FORM_RESET_KEYS:
         st.session_state.pop(key, None)
 
@@ -91,6 +93,39 @@ def _render_latest_product_order_card(st, latest_product_order) -> None:
             )
 
 
+def _render_excel_export(st, core_app, vendor, order_items, request_note: str, order_date_text: str, column) -> None:
+    """엑셀 파일을 명시적으로 생성하고 같은 내용이면 기존 파일을 재사용합니다."""
+    fingerprint = export_fingerprint(vendor, order_items, request_note, order_date_text, "excel")
+    if column.button("엑셀 생성", use_container_width=True):
+        if not order_items:
+            st.warning("엑셀로 저장할 발주 품목이 없습니다.")
+        else:
+            export_path = get_or_create_excel(core_app, vendor, order_items, request_note, order_date_text)
+            st.session_state["order_excel_export"] = {
+                "fingerprint": fingerprint,
+                "path": str(export_path),
+            }
+            st.success(f"엑셀 생성 완료: {Path(export_path).name}")
+
+    export_state = st.session_state.get("order_excel_export", {})
+    if export_state.get("fingerprint") != fingerprint:
+        column.caption("엑셀 생성 후 다운로드할 수 있습니다.")
+        return
+
+    export_path = Path(str(export_state.get("path", "")))
+    if not export_path.exists():
+        column.caption("엑셀 파일을 다시 생성하세요.")
+        return
+
+    with open(export_path, "rb") as file:
+        column.download_button(
+            "엑셀 다운로드",
+            file,
+            file_name=export_path.name,
+            use_container_width=True,
+        )
+
+
 def render(core_app, data) -> None:
     st = core_app.st
     vendors = data["vendors"]
@@ -144,6 +179,7 @@ def render(core_app, data) -> None:
                             saved_items["발주ID"].astype(str) == str(latest["발주ID"])
                         ]
                         st.session_state.order_items = _normalise_items(core_app, rows)
+                        st.session_state.pop("order_excel_export", None)
                         st.rerun()
                 else:
                     st.caption("최근 발주 이력이 없습니다.")
@@ -215,6 +251,7 @@ def render(core_app, data) -> None:
                         st.session_state.order_items = _add_or_merge_item(
                             st.session_state.order_items, item
                         )
+                        st.session_state.pop("order_excel_export", None)
                         st.rerun()
 
         if selected is not None and latest_product_slot is not None:
@@ -264,6 +301,7 @@ def render(core_app, data) -> None:
                 action_col, delete_col, summary_col = st.columns([1.1, 1.1, 2])
                 if action_col.button("수량 변경 적용", use_container_width=True):
                     st.session_state.order_items = updated_items
+                    st.session_state.pop("order_excel_export", None)
                     st.rerun()
 
                 if delete_col.button("선택 품목 삭제", use_container_width=True):
@@ -275,6 +313,7 @@ def render(core_app, data) -> None:
                             for idx, item in enumerate(updated_items)
                             if idx not in checked_indexes
                         ]
+                        st.session_state.pop("order_excel_export", None)
                         st.rerun()
 
                 count, total = core_app.calc_totals(updated_items)
@@ -316,19 +355,15 @@ def render(core_app, data) -> None:
 
             export_items = st.session_state.order_items
             export_note = st.session_state.get("order_request_note", request_note)
-            export_path = core_app.create_excel(
+            _render_excel_export(
+                st,
+                core_app,
                 vendor,
                 export_items,
                 export_note,
                 order_date.strftime("%Y-%m-%d"),
+                c3,
             )
-            with open(export_path, "rb") as file:
-                c3.download_button(
-                    "엑셀 저장",
-                    file,
-                    file_name=Path(export_path).name,
-                    use_container_width=True,
-                )
 
         if not drafts_df.empty:
             with st.expander("임시저장 불러오기"):
@@ -343,6 +378,7 @@ def render(core_app, data) -> None:
                     st.session_state.order_items = _normalise_items(core_app, rows)
                     st.session_state.loaded_vendor_name = str(header.get("거래처명", ""))
                     st.session_state.loaded_request_note = str(header.get("요청사항", ""))
+                    st.session_state.pop("order_excel_export", None)
                     st.rerun()
 
     with preview:
