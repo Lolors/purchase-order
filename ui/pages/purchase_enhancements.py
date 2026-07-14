@@ -161,9 +161,13 @@ def statement_list(purchase_module, data) -> None:
 <style>
 .st-key-statement_history_filters { width: 100%; max-width: 100%; }
 .st-key-statement_history_results { width: 100%; max-width: 100%; }
+[class*="st-key-statement_order_content_"] { width: 50vw; max-width: 50vw; }
 .statement-summary-title { font-size: 21px; font-weight: 800; margin: 22px 0 8px 0; }
 .statement-total-box { font-size: 23px; font-weight: 800; padding: 10px 0 2px 0; }
 .statement-total-detail { font-size: 14px; color: #6b7280; margin: 0 0 16px 0; }
+@media (max-width: 1100px) {
+    [class*="st-key-statement_order_content_"] { width: 100%; max-width: 100%; }
+}
 </style>
 """,
         unsafe_allow_html=True,
@@ -213,9 +217,10 @@ def statement_list(purchase_module, data) -> None:
             label = f"[{vendor_name}] {order_date} | {order_id}"
 
             with st.expander(label, expanded=False):
-                st.markdown('<div class="statement-summary-title">1) 전체 발주 내용</div>', unsafe_allow_html=True)
-                order_rows = order_items[order_items["발주ID"].astype(str) == order_id]
-                st.dataframe(purchases._order_table(order_rows, purchase_module), use_container_width=True, hide_index=True)
+                with st.container(key=f"statement_order_content_{order_id}"):
+                    st.markdown('<div class="statement-summary-title">1) 전체 발주 내용</div>', unsafe_allow_html=True)
+                    order_rows = order_items[order_items["발주ID"].astype(str) == order_id]
+                    st.dataframe(purchases._order_table(order_rows, purchase_module), use_container_width=True, hide_index=True)
 
                 linked_ids = linked_statements["명세서ID"].astype(str).tolist()
                 all_items = statement_items[statement_items["명세서ID"].astype(str).isin(linked_ids)].copy()
@@ -225,7 +230,7 @@ def statement_list(purchase_module, data) -> None:
                 total_purchase = int(product_amount + freight_amount)
 
                 st.markdown('<div class="statement-summary-title">2) 연결된 거래명세서</div>', unsafe_allow_html=True)
-                m1, m2, m3 = st.columns(3)
+                m1, m2, m3, _ = st.columns([1, 1, 1, 3], gap="small")
                 m1.metric("연결 거래명세서", f"{len(linked_statements):,}건")
                 m2.metric("총 입고수량", f"{int(total_received):,}")
                 m3.metric("총 매입금액", f"{total_purchase:,}원")
@@ -254,14 +259,14 @@ def statement_list(purchase_module, data) -> None:
                         unsafe_allow_html=True,
                     )
 
-                    edit_col, delete_col, _ = st.columns([1, 1, 3])
-                    with edit_col:
-                        if st.button("이 거래명세서 수정", key=f"edit_statement_{statement_id}", use_container_width=True):
-                            st.session_state["editing_statement_id"] = statement_id
-
-                    with delete_col:
+                    edit_col, delete_col, _, confirm_col = st.columns([1, 1, 3, 1.2], gap="small")
+                    with confirm_col:
                         confirmed = st.checkbox("삭제 확인", key=f"delete_statement_confirm_{statement_id}")
-                        if st.button("이 거래명세서 삭제", key=f"delete_statement_{statement_id}", disabled=not confirmed, use_container_width=True):
+                    with edit_col:
+                        if st.button("거래명세서 수정", key=f"edit_statement_{statement_id}", use_container_width=True):
+                            st.session_state["editing_statement_id"] = statement_id
+                    with delete_col:
+                        if st.button("거래명세서 삭제", key=f"delete_statement_{statement_id}", disabled=not confirmed, use_container_width=True):
                             purchases._delete_statement(purchase_module, statement_id, statements, statement_items, price_history)
                             st.success(f"{statement_no}번 거래명세서를 삭제했습니다.")
                             st.rerun()
