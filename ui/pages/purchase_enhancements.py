@@ -102,46 +102,104 @@ def _statement_display_table(items: pd.DataFrame, purchase_module):
     return display.style.set_properties(subset=["매출단가"], **{"background-color": "#f3f4f6", "color": "#4b5563"})
 
 
+def _editable_items(items: pd.DataFrame, purchase_module) -> pd.DataFrame:
+    columns = ["제품코드", "정식제품명", "규격", "단위", "발주수량", "입고수량", "매입단가"]
+    editable = items.copy().fillna("")
+    for col in columns:
+        if col not in editable.columns:
+            editable[col] = ""
+    for col in ["발주수량", "입고수량", "매입단가"]:
+        editable[col] = editable[col].apply(lambda value: _to_int(purchase_module, value))
+    return editable[columns].reset_index(drop=True)
+
+
 def _save_statement_edit(
     purchase_module,
     statement_id: str,
     statements: pd.DataFrame,
+    statement_items: pd.DataFrame,
     price_history: pd.DataFrame,
     statement_number: str,
     statement_date,
     freight: int,
     memo: str,
+    edited_items: pd.DataFrame,
 ) -> None:
     statement_id = str(statement_id or "").strip()
     mask = statements["명세서ID"].astype(str).str.strip() == statement_id
     if int(mask.sum()) != 1:
         raise ValueError("수정할 거래명세서를 한 건으로 확인할 수 없습니다.")
 
+    clean_items = edited_items.copy().fillna("")
+    clean_items["정식제품명"] = clean_items["정식제품명"].astype(str).str.strip()
+    clean_items = clean_items[clean_items["정식제품명"] != ""].reset_index(drop=True)
+    if clean_items.empty:
+        raise ValueError("거래명세서에는 품목이 한 개 이상 있어야 합니다.")
+
     date_text = pd.to_datetime(statement_date).strftime("%Y-%m-%d")
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     updated = statements.copy()
     updated.loc[mask, "명세서번호"] = str(statement_number or "").strip()
     updated.loc[mask, "명세서일자"] = date_text
     updated.loc[mask, "운송비"] = int(freight)
     updated.loc[mask, "운송비입력여부"] = "입력"
     updated.loc[mask, "메모"] = str(memo or "")
-    updated.loc[mask, "수정일시"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    updated.loc[mask, "수정일시"] = now_text
 
+    item_rows = []
+    price_rows = []
+    for sequence, (_, row) in enumerate(clean_items.iterrows(), 1):
+        quantity = max(0, _to_int(purchase_module, row.get("입고수량", 0)))
+        purchase_price = max(0, _to_int(purchase_module, row.get("매입단가", 0)))
+        sale_price = int(round(purchase_price * 1.3))
+        product_amount = quantity * purchase_price
+        product_code = str(row.get("제품코드", "") or "").strip()
+        product_name = str(row.get("정식제품명", "") or "").strip()
+        item_rows.append({
+            "명세서ID": statement_id,
+            "순번": sequence,
+            "제품코드": product_code,
+            "정식제품명": product_name,
+            "규격": str(row.get("규격", "") or ""),
+            "단위": str(row.get("단위", "") or ""),
+            "발주수량": max(0, _to_int(purchase_module, row.get("발주수량", 0))),
+            "입고수량": quantity,
+            "매입단가": purchase_price,
+            "상품금액": product_amount,
+            "출고단가": sale_price,
+            "가격적용여부": "적용",
+        })
+        price_rows.append({
+            "가격ID": f"PRICE-{statement_id}-{sequence}",
+            "명세서ID": statement_id,
+            "명세서일자": date_text,
+            "제품코드": product_code,
+            "정식제품명": product_name,
+            "매입단가": purchase_price,
+            "출고단가": sale_price,
+            "등록일시": now_text,
+        })
+
+    remaining_items = statement_items[
+        statement_items["명세서ID"].astype(str).str.strip() != statement_id
+    ].copy()
+    updated_items = pd.concat([remaining_items, pd.DataFrame(item_rows)], ignore_index=True)
+    remaining_prices = price_history[
+        price_history["명세서ID"].astype(str).str.strip() != statement_id
+    ].copy()
+    updated_prices = pd.concat([remaining_prices, pd.DataFrame(price_rows)], ignore_index=True)
+
+    purchase_module.save_table(purchase_module.STATEMENTS_FILE, updated, purchase_module.STATEMENT_COLUMNS)
     purchase_module.save_table(
-        purchase_module.STATEMENTS_FILE,
-        updated,
-        purchase_module.STATEMENT_COLUMNS,
+        purchase_module.STATEMENT_ITEMS_FILE,
+        updated_items,
+        purchase_module.STATEMENT_ITEM_COLUMNS,
     )
-
-    if not price_history.empty:
-        price_mask = price_history["명세서ID"].astype(str).str.strip() == statement_id
-        if price_mask.any():
-            updated_prices = price_history.copy()
-            updated_prices.loc[price_mask, "명세서일자"] = date_text
-            purchase_module.save_table(
-                purchase_module.PRICE_HISTORY_FILE,
-                updated_prices,
-                purchase_module.PRICE_HISTORY_COLUMNS,
-            )
+    purchase_module.save_table(
+        purchase_module.PRICE_HISTORY_FILE,
+        updated_prices,
+        purchase_module.PRICE_HISTORY_COLUMNS,
+    )
 
 
 def statement_list(purchase_module, data) -> None:
@@ -161,7 +219,7 @@ def statement_list(purchase_module, data) -> None:
 <style>
 .st-key-statement_history_filters { width: 100%; max-width: 100%; }
 .st-key-statement_history_results { width: 100%; max-width: 100%; }
-[class*="st-key-statement_order_content_"] { width: 50vw; max-width: 50vw; }
+[class*="st-key-statement_order_content_"] { width: 30vw; max-width: 30vw; }
 .statement-summary-title { font-size: 21px; font-weight: 800; margin: 22px 0 8px 0; }
 .statement-total-box { font-size: 23px; font-weight: 800; padding: 10px 0 2px 0; }
 .statement-total-detail { font-size: 14px; color: #6b7280; margin: 0 0 16px 0; }
@@ -275,7 +333,7 @@ def statement_list(purchase_module, data) -> None:
                         parsed_date = pd.to_datetime(statement.get("명세서일자", ""), errors="coerce")
                         initial_date = today if pd.isna(parsed_date) else parsed_date.date()
                         with st.form(key=f"edit_statement_form_{statement_id}"):
-                            st.markdown("#### 거래명세서 정보 수정")
+                            st.markdown("#### 거래명세서 수정")
                             f1, f2, f3 = st.columns([2, 2, 2])
                             edited_number = f1.text_input("명세서 번호", value=str(statement.get("명세서번호", "")))
                             edited_date = f2.date_input("명세서 일자", value=initial_date)
@@ -286,6 +344,20 @@ def statement_list(purchase_module, data) -> None:
                                 value=_to_int(purchase_module, statement.get("운송비", 0)),
                             )
                             edited_memo = st.text_area("메모", value=str(statement.get("메모", "") or ""))
+                            st.markdown("##### 품목 수정")
+                            st.caption("수량과 매입단가를 바꾸면 상품금액과 매출단가가 자동으로 다시 계산됩니다. 행을 추가하거나 삭제할 수도 있습니다.")
+                            edited_items = st.data_editor(
+                                _editable_items(items, purchase_module),
+                                key=f"edit_statement_items_{statement_id}",
+                                use_container_width=True,
+                                hide_index=True,
+                                num_rows="dynamic",
+                                disabled=["제품코드", "발주수량"],
+                                column_config={
+                                    "입고수량": st.column_config.NumberColumn(min_value=0, step=1),
+                                    "매입단가": st.column_config.NumberColumn(min_value=0, step=100, format="%d원"),
+                                },
+                            )
                             save_col, cancel_col = st.columns(2)
                             save_clicked = save_col.form_submit_button("수정 내용 저장", type="primary", use_container_width=True)
                             cancel_clicked = cancel_col.form_submit_button("취소", use_container_width=True)
@@ -296,11 +368,13 @@ def statement_list(purchase_module, data) -> None:
                                     purchase_module,
                                     statement_id,
                                     statements,
+                                    statement_items,
                                     price_history,
                                     edited_number,
                                     edited_date,
                                     int(edited_freight),
                                     edited_memo,
+                                    edited_items,
                                 )
                             except ValueError as exc:
                                 st.error(str(exc))
