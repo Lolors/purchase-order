@@ -256,6 +256,47 @@ def _item_key(row) -> tuple:
     )
 
 
+def _receipt_status_map(core_app, purchase_module, order_items: pd.DataFrame) -> dict[str, str]:
+    """발주서별 입고 진행 상태를 계산합니다."""
+    if purchase_module is None or order_items.empty:
+        return {}
+
+    statements, statement_items, _, _ = purchase_module.load_purchase_data()
+    ordered_by_order: dict[str, dict[tuple, int]] = {}
+    for _, row in order_items.iterrows():
+        order_id = str(row.get("발주ID", "") or "").strip()
+        if not order_id:
+            continue
+        key = _item_key(row)
+        ordered_qty = core_app.safe_int(row.get("수량", 0))
+        order_bucket = ordered_by_order.setdefault(order_id, {})
+        order_bucket[key] = order_bucket.get(key, 0) + ordered_qty
+
+    received_by_order: dict[str, dict[tuple, int]] = {}
+    if not statements.empty and not statement_items.empty:
+        statement_order = statements.set_index("명세서ID")["발주ID"].astype(str).to_dict()
+        for _, row in statement_items.iterrows():
+            statement_id = str(row.get("명세서ID", "") or "").strip()
+            order_id = str(statement_order.get(statement_id, "") or "").strip()
+            if not order_id:
+                continue
+            key = _item_key(row)
+            received_qty = purchase_module.to_int(row.get("입고수량", 0))
+            order_bucket = received_by_order.setdefault(order_id, {})
+            order_bucket[key] = order_bucket.get(key, 0) + received_qty
+
+    status_by_order: dict[str, str] = {}
+    for order_id, ordered in ordered_by_order.items():
+        received = received_by_order.get(order_id, {})
+        total_received = sum(received.get(key, 0) for key in ordered)
+        if total_received <= 0:
+            status_by_order[order_id] = "발주완료"
+            continue
+        all_received = all(received.get(key, 0) >= qty for key, qty in ordered.items() if qty > 0)
+        status_by_order[order_id] = "입고완료" if all_received else "부분입고"
+    return status_by_order
+
+
 def _receipt_review(core_app, purchase_module, order_id: str, order_items: pd.DataFrame) -> None:
     st = core_app.st
     statements, statement_items, _, _ = purchase_module.load_purchase_data()
@@ -323,7 +364,17 @@ def order_list(core_app, data, purchase_module=None) -> None:
         st.info("발주서가 없습니다.")
         return
 
-    st.dataframe(headers, use_container_width=True, hide_index=True)
+    display_headers = headers.copy()
+    if "상태" not in display_headers.columns:
+        display_headers["상태"] = "발주완료"
+    status_by_order = _receipt_status_map(core_app, purchase_module, items)
+    if status_by_order:
+        display_headers["상태"] = display_headers.apply(
+            lambda row: status_by_order.get(str(row.get("발주ID", "")), str(row.get("상태", "발주완료") or "발주완료")),
+            axis=1,
+        )
+
+    st.dataframe(display_headers, use_container_width=True, hide_index=True)
     vendor_map = headers.set_index("발주ID")["거래처명"].astype(str).to_dict()
     selected = st.selectbox(
         "발주서 선택",
@@ -365,9 +416,18 @@ def order_list(core_app, data, purchase_module=None) -> None:
 def recent(core_app, data) -> None:
     st = core_app.st
     headers = data["orders"]
+    items = data["order_items"]
     st.markdown("## 최근 발주 내역")
     if headers.empty:
         st.info("발주 이력이 없습니다.")
         return
     view = headers.copy().sort_values("발주일시", ascending=False).head(30)
+    if "상태" not in view.columns:
+        view["상태"] = "발주완료"
+    status_by_order = _receipt_status_map(core_app, None, items)
+    if status_by_order:
+        view["상태"] = view.apply(
+            lambda row: status_by_order.get(str(row.get("발주ID", "")), str(row.get("상태", "발주완료") or "발주완료")),
+            axis=1,
+        )
     st.dataframe(view, use_container_width=True, hide_index=True)
