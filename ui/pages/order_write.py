@@ -45,6 +45,23 @@ def _latest_product_order(core_app, vendor_name, product_code, orders_df, saved_
     }
 
 
+def _render_latest_product_order_card(st, latest_product_order) -> None:
+    """거래처 선택 영역 안에 선택 제품의 최근 발주 수량 카드를 표시합니다."""
+    with st.container(border=True):
+        st.markdown("#### 최근 발주 수량")
+        if latest_product_order is None:
+            st.caption("이 거래처의 이전 발주 이력이 없습니다.")
+        else:
+            st.metric(
+                "최근 수량",
+                f'{latest_product_order["quantity"]:,}개',
+            )
+            st.caption(
+                f'{latest_product_order["date"]} · '
+                f'{latest_product_order["order_id"]}'
+            )
+
+
 def render(core_app, data) -> None:
     st = core_app.st
     vendors = data["vendors"]
@@ -65,6 +82,7 @@ def render(core_app, data) -> None:
     with workspace:
         vendor_col, search_col = st.columns([0.9, 1.1], gap="small")
         selected = None
+        latest_product_slot = None
 
         with vendor_col:
             with st.container(border=True):
@@ -93,6 +111,8 @@ def render(core_app, data) -> None:
                         st.rerun()
                 else:
                     st.caption("최근 발주 이력이 없습니다.")
+
+                latest_product_slot = st.empty()
 
         with search_col:
             with st.container(border=True):
@@ -161,29 +181,16 @@ def render(core_app, data) -> None:
                         )
                         st.rerun()
 
-        if selected is not None:
-            history_col, _ = st.columns([0.9, 1.1], gap="small")
-            with history_col:
-                latest_product_order = _latest_product_order(
-                    core_app,
-                    vendor_name,
-                    selected.get("제품코드", ""),
-                    orders_df,
-                    saved_items,
-                )
-                with st.container(border=True):
-                    st.markdown("#### 최근 발주 수량")
-                    if latest_product_order is None:
-                        st.caption("이 거래처의 이전 발주 이력이 없습니다.")
-                    else:
-                        st.metric(
-                            "최근 수량",
-                            f'{latest_product_order["quantity"]:,}개',
-                        )
-                        st.caption(
-                            f'{latest_product_order["date"]} · '
-                            f'{latest_product_order["order_id"]}'
-                        )
+        if selected is not None and latest_product_slot is not None:
+            latest_product_order = _latest_product_order(
+                core_app,
+                vendor_name,
+                selected.get("제품코드", ""),
+                orders_df,
+                saved_items,
+            )
+            with latest_product_slot.container():
+                _render_latest_product_order_card(st, latest_product_order)
 
         with st.container(border=True):
             st.markdown("### 발주 품목")
