@@ -9,6 +9,25 @@ import pandas as pd
 from ui.pages.orders import _add_or_merge_item, _normalise_items, _vendor_panel
 
 
+_ORDER_FORM_RESET_KEYS = [
+    "loaded_vendor_name",
+    "loaded_request_note",
+    "order_product_search",
+    "order_product_pick",
+    "order_items_editor_v2",
+]
+
+
+def _reset_order_form_state(st) -> None:
+    """발주완료 후 작성 화면에 남은 입력값을 초기화합니다."""
+    st.session_state.order_items = []
+    st.session_state["order_request_note"] = ""
+    st.session_state["order_add_qty"] = 1
+    st.session_state["order_date"] = datetime.now().date()
+    for key in _ORDER_FORM_RESET_KEYS:
+        st.session_state.pop(key, None)
+
+
 def _latest_product_order(core_app, vendor_name, product_code, orders_df, saved_items):
     """같은 거래처·제품의 가장 최근 발주일과 수량을 반환합니다."""
     vendor_name = str(vendor_name or "").strip()
@@ -82,7 +101,14 @@ def render(core_app, data) -> None:
     orders_df = data["orders"]
     saved_items = data["order_items"]
 
+    if st.session_state.pop("reset_order_form_after_save", False):
+        _reset_order_form_state(st)
+
     st.markdown("## 발주 작성")
+    if st.session_state.pop("order_saved_success", False):
+        saved_order_id = st.session_state.pop("last_saved_order_id", "")
+        st.success(f"발주 완료: {saved_order_id}")
+
     if vendors.empty:
         st.warning("먼저 거래처를 등록하세요.")
         return
@@ -283,12 +309,17 @@ def render(core_app, data) -> None:
                     order_id = core_app.save_order(
                         vendor_name, request_note, st.session_state.order_items
                     )
-                    st.success(f"발주 완료: {order_id}")
+                    st.session_state["last_saved_order_id"] = order_id
+                    st.session_state["order_saved_success"] = True
+                    st.session_state["reset_order_form_after_save"] = True
+                    st.rerun()
 
+            export_items = st.session_state.order_items
+            export_note = st.session_state.get("order_request_note", request_note)
             export_path = core_app.create_excel(
                 vendor,
-                st.session_state.order_items,
-                request_note,
+                export_items,
+                export_note,
                 order_date.strftime("%Y-%m-%d"),
             )
             with open(export_path, "rb") as file:
