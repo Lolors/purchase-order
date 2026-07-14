@@ -19,6 +19,13 @@ def _safe_text(value: Any) -> str:
     return text or "미지정"
 
 
+def _safe_int(value: Any) -> int:
+    try:
+        return int(float(str(value or "0").replace(",", "")))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _safe_filename_part(value: Any) -> str:
     text = _safe_text(value)
     text = re.sub(r'[\\/:*?"<>|]+', "_", text)
@@ -34,7 +41,7 @@ def _payload(vendor, order_items, request_note: str, order_date: str, kind: str)
             "정식제품명": _safe_text(item.get("정식제품명", item.get("제품명", ""))),
             "규격": _safe_text(item.get("규격", "")),
             "단위": _safe_text(item.get("단위", item.get("포장단위", ""))),
-            "수량": int(float(str(item.get("수량", 0) or 0).replace(",", ""))),
+            "수량": _safe_int(item.get("수량", 0)),
         })
     return {
         "version": EXPORT_CACHE_VERSION,
