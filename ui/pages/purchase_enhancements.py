@@ -102,6 +102,48 @@ def _statement_display_table(items: pd.DataFrame, purchase_module):
     return display.style.set_properties(subset=["매출단가"], **{"background-color": "#f3f4f6", "color": "#4b5563"})
 
 
+def _save_statement_edit(
+    purchase_module,
+    statement_id: str,
+    statements: pd.DataFrame,
+    price_history: pd.DataFrame,
+    statement_number: str,
+    statement_date,
+    freight: int,
+    memo: str,
+) -> None:
+    statement_id = str(statement_id or "").strip()
+    mask = statements["명세서ID"].astype(str).str.strip() == statement_id
+    if int(mask.sum()) != 1:
+        raise ValueError("수정할 거래명세서를 한 건으로 확인할 수 없습니다.")
+
+    date_text = pd.to_datetime(statement_date).strftime("%Y-%m-%d")
+    updated = statements.copy()
+    updated.loc[mask, "명세서번호"] = str(statement_number or "").strip()
+    updated.loc[mask, "명세서일자"] = date_text
+    updated.loc[mask, "운송비"] = int(freight)
+    updated.loc[mask, "운송비입력여부"] = "입력"
+    updated.loc[mask, "메모"] = str(memo or "")
+    updated.loc[mask, "수정일시"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    purchase_module.save_table(
+        purchase_module.STATEMENTS_FILE,
+        updated,
+        purchase_module.STATEMENT_COLUMNS,
+    )
+
+    if not price_history.empty:
+        price_mask = price_history["명세서ID"].astype(str).str.strip() == statement_id
+        if price_mask.any():
+            updated_prices = price_history.copy()
+            updated_prices.loc[price_mask, "명세서일자"] = date_text
+            purchase_module.save_table(
+                purchase_module.PRICE_HISTORY_FILE,
+                updated_prices,
+                purchase_module.PRICE_HISTORY_COLUMNS,
+            )
+
+
 def statement_list(purchase_module, data) -> None:
     st = purchase_module.st
     statements, statement_items, price_history, _ = purchase_module.load_purchase_data()
@@ -212,12 +254,58 @@ def statement_list(purchase_module, data) -> None:
                         unsafe_allow_html=True,
                     )
 
-                    delete_col, _ = st.columns([1, 4])
+                    edit_col, delete_col, _ = st.columns([1, 1, 3])
+                    with edit_col:
+                        if st.button("이 거래명세서 수정", key=f"edit_statement_{statement_id}", use_container_width=True):
+                            st.session_state["editing_statement_id"] = statement_id
+
                     with delete_col:
                         confirmed = st.checkbox("삭제 확인", key=f"delete_statement_confirm_{statement_id}")
                         if st.button("이 거래명세서 삭제", key=f"delete_statement_{statement_id}", disabled=not confirmed, use_container_width=True):
                             purchases._delete_statement(purchase_module, statement_id, statements, statement_items, price_history)
                             st.success(f"{statement_no}번 거래명세서를 삭제했습니다.")
                             st.rerun()
+
+                    if st.session_state.get("editing_statement_id") == statement_id:
+                        parsed_date = pd.to_datetime(statement.get("명세서일자", ""), errors="coerce")
+                        initial_date = today if pd.isna(parsed_date) else parsed_date.date()
+                        with st.form(key=f"edit_statement_form_{statement_id}"):
+                            st.markdown("#### 거래명세서 정보 수정")
+                            f1, f2, f3 = st.columns([2, 2, 2])
+                            edited_number = f1.text_input("명세서 번호", value=str(statement.get("명세서번호", "")))
+                            edited_date = f2.date_input("명세서 일자", value=initial_date)
+                            edited_freight = f3.number_input(
+                                "배송비",
+                                min_value=0,
+                                step=100,
+                                value=_to_int(purchase_module, statement.get("운송비", 0)),
+                            )
+                            edited_memo = st.text_area("메모", value=str(statement.get("메모", "") or ""))
+                            save_col, cancel_col = st.columns(2)
+                            save_clicked = save_col.form_submit_button("수정 내용 저장", type="primary", use_container_width=True)
+                            cancel_clicked = cancel_col.form_submit_button("취소", use_container_width=True)
+
+                        if save_clicked:
+                            try:
+                                _save_statement_edit(
+                                    purchase_module,
+                                    statement_id,
+                                    statements,
+                                    price_history,
+                                    edited_number,
+                                    edited_date,
+                                    int(edited_freight),
+                                    edited_memo,
+                                )
+                            except ValueError as exc:
+                                st.error(str(exc))
+                            else:
+                                st.session_state.pop("editing_statement_id", None)
+                                st.success(f"{statement_no}번 거래명세서를 수정했습니다.")
+                                st.rerun()
+                        elif cancel_clicked:
+                            st.session_state.pop("editing_statement_id", None)
+                            st.rerun()
+
                     if seq < len(linked_statements):
                         st.markdown("---")
