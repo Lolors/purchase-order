@@ -297,6 +297,22 @@ def _receipt_status_map(core_app, purchase_module, order_items: pd.DataFrame) ->
     return status_by_order
 
 
+def _status_cell_style(value) -> str:
+    """발주서 목록의 상태 셀 배경색을 반환합니다."""
+    status = str(value or "").strip()
+    if status == "입고완료":
+        return "background-color: #d9f99d; color: #111827; font-weight: 700;"
+    if status == "부분입고":
+        return "background-color: #fde68a; color: #111827; font-weight: 700;"
+    return ""
+
+
+def _style_status_column(frame: pd.DataFrame):
+    if "상태" not in frame.columns:
+        return frame
+    return frame.style.applymap(_status_cell_style, subset=["상태"])
+
+
 def _receipt_review(core_app, purchase_module, order_id: str, order_items: pd.DataFrame) -> None:
     st = core_app.st
     statements, statement_items, _, _ = purchase_module.load_purchase_data()
@@ -374,7 +390,7 @@ def order_list(core_app, data, purchase_module=None) -> None:
             axis=1,
         )
 
-    st.dataframe(display_headers, use_container_width=True, hide_index=True)
+    st.dataframe(_style_status_column(display_headers), use_container_width=True, hide_index=True)
     vendor_map = headers.set_index("발주ID")["거래처명"].astype(str).to_dict()
     selected = st.selectbox(
         "발주서 선택",
@@ -430,4 +446,4 @@ def recent(core_app, data) -> None:
             lambda row: status_by_order.get(str(row.get("발주ID", "")), str(row.get("상태", "발주완료") or "발주완료")),
             axis=1,
         )
-    st.dataframe(view, use_container_width=True, hide_index=True)
+    st.dataframe(_style_status_column(view), use_container_width=True, hide_index=True)
