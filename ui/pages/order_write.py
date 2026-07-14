@@ -9,6 +9,42 @@ import pandas as pd
 from ui.pages.orders import _add_or_merge_item, _normalise_items, _vendor_panel
 
 
+def _latest_product_order(core_app, vendor_name, product_code, orders_df, saved_items):
+    """같은 거래처·제품의 가장 최근 발주일과 수량을 반환합니다."""
+    vendor_name = str(vendor_name or "").strip()
+    product_code = str(product_code or "").strip()
+    if not vendor_name or not product_code or orders_df.empty or saved_items.empty:
+        return None
+
+    vendor_orders = orders_df[orders_df["거래처명"].astype(str) == vendor_name].copy()
+    if vendor_orders.empty:
+        return None
+
+    vendor_orders["발주ID"] = vendor_orders["발주ID"].astype(str)
+    vendor_orders["_ordered_at"] = pd.to_datetime(vendor_orders["발주일시"], errors="coerce")
+    order_dates = vendor_orders.set_index("발주ID")["_ordered_at"].to_dict()
+
+    items = saved_items.copy()
+    items = items[
+        (items["발주ID"].astype(str).isin(vendor_orders["발주ID"]))
+        & (items["제품코드"].astype(str).str.strip() == product_code)
+    ].copy()
+    if items.empty:
+        return None
+
+    items["_ordered_at"] = items["발주ID"].astype(str).map(order_dates)
+    items["_quantity"] = items["수량"].apply(lambda value: core_app.safe_int(value, 0))
+    latest_date = items["_ordered_at"].max()
+    latest_rows = items[items["_ordered_at"] == latest_date]
+    quantity = int(latest_rows["_quantity"].sum())
+    order_id = str(latest_rows.iloc[0].get("발주ID", ""))
+    return {
+        "date": "" if pd.isna(latest_date) else latest_date.strftime("%Y-%m-%d"),
+        "quantity": quantity,
+        "order_id": order_id,
+    }
+
+
 def render(core_app, data) -> None:
     st = core_app.st
     vendors = data["vendors"]
@@ -28,6 +64,7 @@ def render(core_app, data) -> None:
 
     with workspace:
         vendor_col, search_col = st.columns([0.9, 1.1], gap="small")
+        selected = None
 
         with vendor_col:
             with st.container(border=True):
@@ -68,7 +105,6 @@ def render(core_app, data) -> None:
                     label_visibility="collapsed",
                 )
                 result = core_app.search_products(keyword, vendor_name, products, aliases)
-                selected = None
 
                 if keyword and result.empty:
                     st.warning("검색 결과가 없습니다.")
@@ -124,6 +160,30 @@ def render(core_app, data) -> None:
                             st.session_state.order_items, item
                         )
                         st.rerun()
+
+        if selected is not None:
+            history_col, _ = st.columns([0.9, 1.1], gap="small")
+            with history_col:
+                latest_product_order = _latest_product_order(
+                    core_app,
+                    vendor_name,
+                    selected.get("제품코드", ""),
+                    orders_df,
+                    saved_items,
+                )
+                with st.container(border=True):
+                    st.markdown("#### 최근 발주 수량")
+                    if latest_product_order is None:
+                        st.caption("이 거래처의 이전 발주 이력이 없습니다.")
+                    else:
+                        st.metric(
+                            "최근 수량",
+                            f'{latest_product_order["quantity"]:,}개',
+                        )
+                        st.caption(
+                            f'{latest_product_order["date"]} · '
+                            f'{latest_product_order["order_id"]}'
+                        )
 
         with st.container(border=True):
             st.markdown("### 발주 품목")
