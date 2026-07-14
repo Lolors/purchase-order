@@ -48,17 +48,27 @@ def _latest_product_order(core_app, vendor_name, product_code, orders_df, saved_
 def _render_latest_product_order_card(st, latest_product_order) -> None:
     """거래처 선택 영역 안에 선택 제품의 최근 발주 수량 카드를 표시합니다."""
     with st.container(border=True):
-        st.markdown("#### 최근 발주 수량")
         if latest_product_order is None:
-            st.caption("이 거래처의 이전 발주 이력이 없습니다.")
-        else:
-            st.metric(
-                "최근 수량",
-                f'{latest_product_order["quantity"]:,}개',
+            st.markdown(
+                """
+                <div style="text-align:center; padding:8px 0;">
+                    <div style="font-size:1rem; font-weight:700;">최근 발주 수량</div>
+                    <div style="margin-top:8px; color:#6b7280;">이전 발주 이력 없음</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
-            st.caption(
-                f'{latest_product_order["date"]} · '
-                f'{latest_product_order["order_id"]}'
+        else:
+            st.markdown(
+                f"""
+                <div style="text-align:center; padding:8px 0;">
+                    <div style="font-size:1rem; font-weight:700;">최근 발주 수량</div>
+                    <div style="font-size:2rem; font-weight:800; margin-top:6px;">
+                        {latest_product_order['quantity']:,}개
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
 
