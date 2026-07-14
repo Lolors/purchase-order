@@ -161,6 +161,9 @@ def _excel_bytes(month_key: str, summary: pd.DataFrame, detail: pd.DataFrame, ve
     ws["A1"].font = Font(size=16, bold=True)
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max(1, len(summary.columns)))
     ws["A1"].alignment = Alignment(horizontal="center")
+    last_column = get_column_letter(max(1, len(summary.columns)))
+    ws.auto_filter.ref = f"A3:{last_column}{ws.max_row}"
+    ws.freeze_panes = "A4"
 
     wb.save(output)
     output.seek(0)
