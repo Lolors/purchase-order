@@ -295,7 +295,7 @@ def render(purchase_module, data) -> None:
         st.session_state[f"show_substitution_form_{selected_order}"] = False
 
     freight = freight_col.number_input("운송비(배송비)", min_value=0, value=0, step=1000, key=f"statement_freight_{selected_order}")
-    freight_checked = freight_col.checkbox("운송비 입력 완료", value=False, key=f"statement_freight_checked_{selected_order}")
+    freight_checked = freight_col.checkbox("운송비 무료", value=False, key=f"statement_freight_checked_{selected_order}")
 
     if st.session_state.get(f"show_substitution_form_{selected_order}", False):
         with st.container(border=True):
