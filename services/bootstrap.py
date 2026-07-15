@@ -57,22 +57,31 @@ def build_application(base_dir: Path):
     core_app.st.text_input = text_input_with_substitution_reason
     purchase.st.text_input = text_input_with_substitution_reason
 
-    # 입고행을 복사한 뒤 처음 입력한 값이 다음 rerun에서 사라지지 않도록,
-    # data_editor의 변경분을 위젯 콜백 단계에서 입고행 세션 상태에 즉시 반영합니다.
+    # 복사된 입고행을 편집할 때 첫 입력값이 다음 rerun에서 사라지지 않도록,
+    # data_editor가 보유한 변경분을 렌더링 원본과 입고행 세션 상태에 모두 즉시 반영합니다.
     original_data_editor = core_app.st.data_editor
 
-    def persist_receipt_editor_changes(widget_key: str) -> None:
+    def _receipt_editor_order_id(widget_key: str) -> str:
         prefix = "statement_receipt_input_"
         if not str(widget_key).startswith(prefix):
-            return
-
+            return ""
         order_and_version = str(widget_key)[len(prefix):]
         selected_order, separator, _version = order_and_version.rpartition("_")
-        if not separator or not selected_order:
+        return selected_order if separator else ""
+
+    def _receipt_editor_changes(widget_key: str) -> dict:
+        widget_state = core_app.st.session_state.get(widget_key, {})
+        if not isinstance(widget_state, dict):
+            return {}
+        edited_rows = widget_state.get("edited_rows", {})
+        return edited_rows if isinstance(edited_rows, dict) else {}
+
+    def persist_receipt_editor_changes(widget_key: str) -> None:
+        selected_order = _receipt_editor_order_id(widget_key)
+        if not selected_order:
             return
 
-        widget_state = core_app.st.session_state.get(widget_key, {})
-        edited_rows = widget_state.get("edited_rows", {}) if isinstance(widget_state, dict) else {}
+        edited_rows = _receipt_editor_changes(widget_key)
         rows_key = f"statement_receipt_rows_{selected_order}"
         stored_rows = core_app.st.session_state.get(rows_key)
         if not isinstance(stored_rows, list):
@@ -99,21 +108,41 @@ def build_application(base_dir: Path):
         core_app.st.session_state[rows_key] = stored_rows
 
     def data_editor_with_receipt_persistence(data, *args, **kwargs):
-        widget_key = kwargs.get("key")
-        if not str(widget_key or "").startswith("statement_receipt_input_"):
+        widget_key = str(kwargs.get("key") or "")
+        if not widget_key.startswith("statement_receipt_input_"):
             return original_data_editor(data, *args, **kwargs)
+
+        # Streamlit은 rerun 시 전달받은 원본 DataFrame을 우선 사용하므로,
+        # 위젯 내부의 아직 반영되지 않은 변경분을 먼저 원본에 합쳐야 값이 되돌아가지 않습니다.
+        render_data = data.copy() if hasattr(data, "copy") else data
+        edited_rows = _receipt_editor_changes(widget_key)
+        if hasattr(render_data, "columns") and hasattr(render_data, "iat"):
+            column_positions = {str(name): index for index, name in enumerate(render_data.columns)}
+            for row_index, changes in edited_rows.items():
+                try:
+                    index = int(row_index)
+                except (TypeError, ValueError):
+                    continue
+                if index < 0 or index >= len(render_data) or not isinstance(changes, dict):
+                    continue
+                for column, value in changes.items():
+                    column_index = column_positions.get(str(column))
+                    if column_index is not None:
+                        render_data.iat[index, column_index] = value
+
+        persist_receipt_editor_changes(widget_key)
 
         existing_on_change = kwargs.pop("on_change", None)
         existing_args = kwargs.pop("args", ())
         existing_kwargs = kwargs.pop("kwargs", {})
 
         def on_change() -> None:
-            persist_receipt_editor_changes(str(widget_key))
+            persist_receipt_editor_changes(widget_key)
             if existing_on_change is not None:
                 existing_on_change(*existing_args, **existing_kwargs)
 
         kwargs["on_change"] = on_change
-        return original_data_editor(data, *args, **kwargs)
+        return original_data_editor(render_data, *args, **kwargs)
 
     core_app.st.data_editor = data_editor_with_receipt_persistence
     purchase.st.data_editor = data_editor_with_receipt_persistence
