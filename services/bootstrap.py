@@ -57,43 +57,6 @@ def build_application(base_dir: Path):
     core_app.st.text_input = text_input_with_substitution_reason
     purchase.st.text_input = text_input_with_substitution_reason
 
-    # 입고표는 data_editor 자체 rerun만 사용합니다. 별도 on_change 콜백을 붙이면
-    # 셀 이동 중 rerun이 겹쳐 다음 입력값이 사라질 수 있으므로 사용하지 않습니다.
-    # 대신 위젯이 보유한 기존 변경분을 다음 렌더링 원본에 조용히 합칩니다.
-    original_data_editor = core_app.st.data_editor
-
-    def data_editor_with_receipt_edits(data, *args, **kwargs):
-        widget_key = str(kwargs.get("key") or "")
-        if not widget_key.startswith("statement_receipt_input_"):
-            return original_data_editor(data, *args, **kwargs)
-
-        render_data = data.copy() if hasattr(data, "copy") else data
-        widget_state = core_app.st.session_state.get(widget_key, {})
-        edited_rows = widget_state.get("edited_rows", {}) if isinstance(widget_state, dict) else {}
-
-        if isinstance(edited_rows, dict) and hasattr(render_data, "columns") and hasattr(render_data, "iat"):
-            column_positions = {str(name): index for index, name in enumerate(render_data.columns)}
-            for row_index, changes in edited_rows.items():
-                try:
-                    index = int(row_index)
-                except (TypeError, ValueError):
-                    continue
-                if index < 0 or index >= len(render_data) or not isinstance(changes, dict):
-                    continue
-                for column, value in changes.items():
-                    column_index = column_positions.get(str(column))
-                    if column_index is not None:
-                        render_data.iat[index, column_index] = value
-
-        # 입고표에는 추가 콜백을 붙이지 않습니다.
-        kwargs.pop("on_change", None)
-        kwargs.pop("args", None)
-        kwargs.pop("kwargs", None)
-        return original_data_editor(render_data, *args, **kwargs)
-
-    core_app.st.data_editor = data_editor_with_receipt_edits
-    purchase.st.data_editor = data_editor_with_receipt_edits
-
     # 레거시 모듈 로딩이 끝난 뒤 최종 미리보기 렌더러를 적용합니다.
     core_app.render_order_html = lambda vendor, items, note, order_id=None, order_date=None: render_order_html(
         core_app, vendor, items, note, order_id=order_id, order_date=order_date
