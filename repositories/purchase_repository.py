@@ -15,6 +15,7 @@ STATEMENT_COLUMNS = [
 STATEMENT_ITEM_COLUMNS = [
     "명세서ID", "순번", "제품코드", "정식제품명", "규격", "단위", "발주수량",
     "입고수량", "매입단가", "상품금액", "출고단가", "가격적용여부",
+    "원발주제품코드", "원발주제품명", "원발주규격", "원발주단위", "입고유형", "대체사유",
 ]
 PRICE_HISTORY_COLUMNS = [
     "가격ID", "명세서ID", "명세서일자", "제품코드", "정식제품명", "매입단가", "출고단가", "등록일시",
@@ -28,8 +29,25 @@ def _frame(rows, columns):
     return pd.DataFrame(rows, columns=columns).fillna("")
 
 
+def _ensure_substitution_columns(conn) -> None:
+    existing = {str(row[1]) for row in conn.execute("PRAGMA table_info(statement_items)").fetchall()}
+    additions = {
+        "original_product_code": "TEXT",
+        "original_product_name": "TEXT",
+        "original_specification": "TEXT",
+        "original_packaging_unit": "TEXT",
+        "receipt_type": "TEXT",
+        "substitution_reason": "TEXT",
+    }
+    for column, sql_type in additions.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE statement_items ADD COLUMN {column} {sql_type}")
+    conn.commit()
+
+
 def load_all(data_dir: Path):
     with connect(data_dir) as conn:
+        _ensure_substitution_columns(conn)
         statements = _frame(conn.execute("""
             SELECT statement_id, order_id, vendor_name, statement_number, statement_date,
                    freight, freight_entered, memo, created_at, updated_at
@@ -38,7 +56,9 @@ def load_all(data_dir: Path):
         items = _frame(conn.execute("""
             SELECT statement_id, sequence, product_code, product_name, specification,
                    packaging_unit, ordered_quantity, received_quantity, purchase_price,
-                   product_amount, sale_price, apply_price
+                   product_amount, sale_price, apply_price,
+                   original_product_code, original_product_name, original_specification,
+                   original_packaging_unit, receipt_type, substitution_reason
             FROM statement_items ORDER BY statement_id, sequence, id
         """).fetchall(), STATEMENT_ITEM_COLUMNS)
         prices = _frame(conn.execute("""
@@ -54,6 +74,8 @@ def load_all(data_dir: Path):
     for df in (items, prices):
         if not df.empty:
             df["제품코드"] = df["제품코드"].map(normalize_product_code)
+    if not items.empty:
+        items["원발주제품코드"] = items["원발주제품코드"].map(normalize_product_code)
     return statements, items, prices, closes
 
 
@@ -87,13 +109,19 @@ def replace_statement_items(data_dir: Path, df: pd.DataFrame) -> None:
         str(r.get("정식제품명", "")), str(r.get("규격", "")), str(r.get("단위", "")),
         _int(r.get("발주수량", 0)), _int(r.get("입고수량", 0)), _int(r.get("매입단가", 0)),
         _int(r.get("상품금액", 0)), _int(r.get("출고단가", 0)), str(r.get("가격적용여부", "")),
+        normalize_product_code(r.get("원발주제품코드", "")), str(r.get("원발주제품명", "")),
+        str(r.get("원발주규격", "")), str(r.get("원발주단위", "")),
+        str(r.get("입고유형", "")), str(r.get("대체사유", "")),
     ) for _, r in clean.iterrows() if str(r.get("명세서ID", "")).strip()]
     with transaction(data_dir) as conn:
+        _ensure_substitution_columns(conn)
         conn.execute("DELETE FROM statement_items")
         conn.executemany("""
             INSERT INTO statement_items(statement_id,sequence,product_code,product_name,specification,
-            packaging_unit,ordered_quantity,received_quantity,purchase_price,product_amount,sale_price,apply_price)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            packaging_unit,ordered_quantity,received_quantity,purchase_price,product_amount,sale_price,
+            apply_price,original_product_code,original_product_name,original_specification,
+            original_packaging_unit,receipt_type,substitution_reason)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, rows)
 
 
