@@ -12,7 +12,7 @@ from ui.pages import (
     purchase_enhancements,
     purchases,
     statement_history,
-    statement_register_substitution,
+    statement_register_lot_ui,
 )
 
 
@@ -22,8 +22,8 @@ def run(core_app, purchase_module) -> None:
     core_app.init_state()
 
     # 대체입고 품목도 원발주품목 기준으로 입고상태를 계산합니다.
-    orders._item_key = statement_register_substitution.item_key
-    purchase_enhancements._item_key = statement_register_substitution.item_key
+    orders._item_key = statement_register_lot_ui.item_key
+    purchase_enhancements._item_key = statement_register_lot_ui.item_key
 
     vendors, products, aliases, drafts, draft_items, order_headers, order_items = core_app.load_data()
     data = {
@@ -41,7 +41,7 @@ def run(core_app, purchase_module) -> None:
         "발주 작성": lambda: order_write.render(core_app, data),
         "임시저장 목록": lambda: orders.drafts(core_app, data),
         "발주서 목록": lambda: order_list_enhanced.render(core_app, data, purchase_module),
-        "거래명세서 등록": lambda: statement_register_substitution.render(purchase_module, data),
+        "거래명세서 등록": lambda: statement_register_lot_ui.render(purchase_module, data),
         "거래명세서 내역": lambda: statement_history.render(purchase_module, data),
         "월별 매입 현황": lambda: accounting_export.render(purchase_module, data),
         "거래처 관리": lambda: catalog.vendors(core_app, data),
