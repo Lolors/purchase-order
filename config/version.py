@@ -1,8 +1,8 @@
 """발주관리 시스템 버전 정책과 표시 문자열."""
 
-APP_NAME = "발주관리 시스템"
+APP_NAME = "메디풀 발주관리"
 APP_VERSION = "1.3.0"
-APP_TITLE = f"{APP_NAME} {APP_VERSION}"
+APP_TITLE = APP_NAME
 
 # 버전 규칙
 # - 버그 수정: PATCH (예: 1.0.1)
