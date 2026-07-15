@@ -25,5 +25,15 @@ class OrderRepository:
             items,
         )
 
+    def update(self, order_id: str, vendor_name: str, request_note: str, items: list[dict]) -> str:
+        return db_store.update_order(
+            self.data_dir,
+            self.base_app,
+            order_id,
+            vendor_name,
+            request_note,
+            items,
+        )
+
     def delete(self, order_id: str) -> None:
         db_store.delete_order(self.data_dir, order_id)
