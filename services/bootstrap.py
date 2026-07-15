@@ -32,6 +32,7 @@ def build_application(base_dir: Path):
     # 레거시 모듈은 아직 거래명세서 페이지 구현 제공자로만 사용합니다.
     import app_order_review as final_app
     purchase = final_app.purchase
+    purchase.STATEMENT_ITEM_COLUMNS = purchase_repository.STATEMENT_ITEM_COLUMNS
 
     # 레거시 모듈 로딩이 끝난 뒤 최종 미리보기 렌더러를 적용합니다.
     core_app.render_order_html = lambda vendor, items, note, order_id=None, order_date=None: render_order_html(
