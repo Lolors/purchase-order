@@ -57,6 +57,67 @@ def build_application(base_dir: Path):
     core_app.st.text_input = text_input_with_substitution_reason
     purchase.st.text_input = text_input_with_substitution_reason
 
+    # 입고행을 복사한 뒤 처음 입력한 값이 다음 rerun에서 사라지지 않도록,
+    # data_editor의 변경분을 위젯 콜백 단계에서 입고행 세션 상태에 즉시 반영합니다.
+    original_data_editor = core_app.st.data_editor
+
+    def persist_receipt_editor_changes(widget_key: str) -> None:
+        prefix = "statement_receipt_input_"
+        if not str(widget_key).startswith(prefix):
+            return
+
+        order_and_version = str(widget_key)[len(prefix):]
+        selected_order, separator, _version = order_and_version.rpartition("_")
+        if not separator or not selected_order:
+            return
+
+        widget_state = core_app.st.session_state.get(widget_key, {})
+        edited_rows = widget_state.get("edited_rows", {}) if isinstance(widget_state, dict) else {}
+        rows_key = f"statement_receipt_rows_{selected_order}"
+        stored_rows = core_app.st.session_state.get(rows_key)
+        if not isinstance(stored_rows, list):
+            return
+
+        editable_columns = {
+            "입고수량",
+            "매입단가",
+            "제조번호",
+            "유통기한",
+            "현재 가격 적용",
+        }
+        for row_index, changes in edited_rows.items():
+            try:
+                index = int(row_index)
+            except (TypeError, ValueError):
+                continue
+            if index < 0 or index >= len(stored_rows) or not isinstance(changes, dict):
+                continue
+            for column, value in changes.items():
+                if column in editable_columns:
+                    stored_rows[index][column] = value
+
+        core_app.st.session_state[rows_key] = stored_rows
+
+    def data_editor_with_receipt_persistence(data, *args, **kwargs):
+        widget_key = kwargs.get("key")
+        if not str(widget_key or "").startswith("statement_receipt_input_"):
+            return original_data_editor(data, *args, **kwargs)
+
+        existing_on_change = kwargs.pop("on_change", None)
+        existing_args = kwargs.pop("args", ())
+        existing_kwargs = kwargs.pop("kwargs", {})
+
+        def on_change() -> None:
+            persist_receipt_editor_changes(str(widget_key))
+            if existing_on_change is not None:
+                existing_on_change(*existing_args, **existing_kwargs)
+
+        kwargs["on_change"] = on_change
+        return original_data_editor(data, *args, **kwargs)
+
+    core_app.st.data_editor = data_editor_with_receipt_persistence
+    purchase.st.data_editor = data_editor_with_receipt_persistence
+
     # 레거시 모듈 로딩이 끝난 뒤 최종 미리보기 렌더러를 적용합니다.
     core_app.render_order_html = lambda vendor, items, note, order_id=None, order_date=None: render_order_html(
         core_app, vendor, items, note, order_id=order_id, order_date=order_date
