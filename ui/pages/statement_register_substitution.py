@@ -125,6 +125,100 @@ def _substitution_state(st, selected_order: str) -> dict[str, dict]:
     return state
 
 
+def _receipt_rows_state(st, selected_order: str) -> list[dict]:
+    key = f"statement_receipt_rows_{selected_order}"
+    rows = st.session_state.get(key)
+    if not isinstance(rows, list):
+        rows = []
+        st.session_state[key] = rows
+    return rows
+
+
+def _receipt_row_version(st, selected_order: str) -> int:
+    return int(st.session_state.get(f"statement_receipt_rows_version_{selected_order}", 0))
+
+
+def _bump_receipt_row_version(st, selected_order: str) -> None:
+    key = f"statement_receipt_rows_version_{selected_order}"
+    st.session_state[key] = int(st.session_state.get(key, 0)) + 1
+
+
+def _next_receipt_row_id(st, selected_order: str) -> int:
+    key = f"statement_receipt_next_row_id_{selected_order}"
+    next_id = int(st.session_state.get(key, 1))
+    st.session_state[key] = next_id + 1
+    return next_id
+
+
+def _normalise_bool(value) -> bool:
+    return bool(value) if not isinstance(value, str) else value.strip().lower() in {"y", "yes", "true", "1"}
+
+
+def _actual_for_item(original, substitution: dict | None) -> dict:
+    if substitution:
+        return substitution.get("제품", {})
+    return {
+        "제품코드": str(original.get("제품코드", "") or ""),
+        "정식제품명": str(original.get("제품명", "") or ""),
+        "규격": str(original.get("규격", "") or ""),
+        "단위": str(original.get("포장단위", "") or ""),
+    }
+
+
+def _sync_receipt_rows(st, purchase_module, selected_order: str, selected_lookup: dict[str, pd.Series], substitution_state: dict[str, dict]) -> list[dict]:
+    rows = _receipt_rows_state(st, selected_order)
+    selected_item_nos = set(selected_lookup)
+    rows = [dict(row) for row in rows if str(row.get("품목번호", "")) in selected_item_nos]
+
+    existing_item_nos = {str(row.get("품목번호", "")) for row in rows}
+    for item_no, original in selected_lookup.items():
+        if item_no not in existing_item_nos:
+            rows.append({
+                "행번호": _next_receipt_row_id(st, selected_order),
+                "품목번호": int(item_no),
+                "입고수량": _to_int(purchase_module, original.get("남은수량", 0)),
+                "매입단가": 0,
+                "제조번호": "",
+                "유통기한": "",
+                "현재 가격 적용": True,
+            })
+
+    for row in rows:
+        item_no = str(row.get("품목번호", ""))
+        original = selected_lookup.get(item_no)
+        if original is None:
+            continue
+        actual = _actual_for_item(original, substitution_state.get(item_no))
+        row["제품명"] = str(actual.get("정식제품명", "") or original.get("제품명", ""))
+        row["규격"] = str(actual.get("규격", "") or original.get("규격", ""))
+        row["복사/삭제"] = False
+        row["입고수량"] = _to_int(purchase_module, row.get("입고수량", 0))
+        row["매입단가"] = _to_int(purchase_module, row.get("매입단가", 0))
+        row["제조번호"] = str(row.get("제조번호", "") or "")
+        row["유통기한"] = str(row.get("유통기한", "") or "")
+        row["현재 가격 적용"] = _normalise_bool(row.get("현재 가격 적용", True))
+
+    st.session_state[f"statement_receipt_rows_{selected_order}"] = rows
+    return rows
+
+
+def _store_entered_rows(st, selected_order: str, entered: pd.DataFrame) -> list[dict]:
+    rows = []
+    if entered is not None and not entered.empty:
+        for _, row in entered.iterrows():
+            rows.append({
+                "행번호": int(row.get("행번호", 0)),
+                "품목번호": int(row.get("품목번호", 0)),
+                "입고수량": int(float(row.get("입고수량", 0) or 0)),
+                "매입단가": int(float(row.get("매입단가", 0) or 0)),
+                "제조번호": str(row.get("제조번호", "") or "").strip(),
+                "유통기한": str(row.get("유통기한", "") or "").strip(),
+                "현재 가격 적용": _normalise_bool(row.get("현재 가격 적용", True)),
+            })
+    st.session_state[f"statement_receipt_rows_{selected_order}"] = rows
+    return rows
+
+
 def _normalize_expiry(value) -> str:
     text = str(value or "").strip()
     if not text:
@@ -247,32 +341,34 @@ def render(purchase_module, data) -> None:
     st.session_state[f"statement_substitution_state_{selected_order}"] = substitution_state
 
     st.markdown("### 선택 품목 입고정보 입력")
-    st.caption("유통기한은 20280111, 28.9.1, 28/9/1처럼 입력해도 저장 시 YYYY-MM-DD로 통일됩니다.")
+    st.caption("같은 제품이 제조번호·유통기한별로 나뉘어 들어오면 해당 행을 체크한 뒤 '선택 행 복사'를 누르세요.")
     _render_substitution_badges(st, substitution_state, selected_lookup)
 
-    input_rows = []
-    for item_no, original in selected_lookup.items():
-        substitution = substitution_state.get(item_no)
-        actual = substitution.get("제품", {}) if substitution else {}
-        input_rows.append({
-            "품목번호": int(item_no),
-            "제품명": str(actual.get("정식제품명", "") or original.get("제품명", "")),
-            "규격": str(actual.get("규격", "") or original.get("규격", "")),
-            "입고수량": _to_int(purchase_module, original.get("남은수량", 0)),
-            "매입단가": 0,
-            "제조번호": "",
-            "유통기한": "",
-            "현재 가격 적용": True,
-        })
-
-    if not input_rows:
+    receipt_rows = _sync_receipt_rows(st, purchase_module, selected_order, selected_lookup, substitution_state)
+    if not receipt_rows:
         st.info("위 표에서 거래명세서에 적힌 품목을 선택하세요.")
         entered = pd.DataFrame()
     else:
+        editor_rows = []
+        for row in receipt_rows:
+            editor_rows.append({
+                "복사/삭제": False,
+                "행번호": int(row.get("행번호", 0)),
+                "품목번호": int(row.get("품목번호", 0)),
+                "제품명": str(row.get("제품명", "") or ""),
+                "규격": str(row.get("규격", "") or ""),
+                "입고수량": _to_int(purchase_module, row.get("입고수량", 0)),
+                "매입단가": _to_int(purchase_module, row.get("매입단가", 0)),
+                "제조번호": str(row.get("제조번호", "") or ""),
+                "유통기한": str(row.get("유통기한", "") or ""),
+                "현재 가격 적용": _normalise_bool(row.get("현재 가격 적용", True)),
+            })
         entered = st.data_editor(
-            pd.DataFrame(input_rows), use_container_width=True, hide_index=True,
-            disabled=["품목번호", "제품명", "규격"],
+            pd.DataFrame(editor_rows), use_container_width=True, hide_index=True,
+            disabled=["행번호", "품목번호", "제품명", "규격"],
             column_config={
+                "복사/삭제": st.column_config.CheckboxColumn("복사/삭제", width="small"),
+                "행번호": None,
                 "품목번호": None,
                 "제품명": st.column_config.TextColumn("제품명", width="large"),
                 "규격": st.column_config.TextColumn("규격", width="small"),
@@ -282,11 +378,62 @@ def render(purchase_module, data) -> None:
                 "유통기한": st.column_config.TextColumn("유통기한", width="small"),
                 "현재 가격 적용": st.column_config.CheckboxColumn("현재 가격 적용", width="small"),
             },
-            key=f"statement_receipt_input_{selected_order}",
+            key=f"statement_receipt_input_{selected_order}_{_receipt_row_version(st, selected_order)}",
         )
+        _store_entered_rows(st, selected_order, entered)
 
-    action_col, cancel_col, spacer_col, freight_col = st.columns([1.3, 1.5, 2.2, 1.5])
-    if action_col.button("대체품 입고", use_container_width=True, disabled=selected_items.empty, key=f"open_substitution_{selected_order}"):
+    split_col, delete_col, substitute_col, cancel_col, spacer_col, freight_col = st.columns([1.1, 1.1, 1.2, 1.4, 1.4, 1.5])
+    selected_receipt_rows = entered[entered.get("복사/삭제", False) == True].copy() if not entered.empty else pd.DataFrame()  # noqa: E712
+
+    if split_col.button("선택 행 복사", use_container_width=True, disabled=entered.empty, key=f"copy_receipt_row_{selected_order}"):
+        if selected_receipt_rows.empty:
+            st.warning("복사할 입고행을 체크하세요.")
+        else:
+            stored_rows = _store_entered_rows(st, selected_order, entered)
+            selected_row_ids = {int(row.get("행번호", 0)) for _, row in selected_receipt_rows.iterrows()}
+            for row in list(stored_rows):
+                if int(row.get("행번호", 0)) not in selected_row_ids:
+                    continue
+                copied = dict(row)
+                copied["행번호"] = _next_receipt_row_id(st, selected_order)
+                copied["입고수량"] = 0
+                copied["제조번호"] = ""
+                copied["유통기한"] = ""
+                stored_rows.append(copied)
+            st.session_state[f"statement_receipt_rows_{selected_order}"] = stored_rows
+            _bump_receipt_row_version(st, selected_order)
+            st.rerun()
+
+    if delete_col.button("선택 행 삭제", use_container_width=True, disabled=entered.empty, key=f"delete_receipt_row_{selected_order}"):
+        if selected_receipt_rows.empty:
+            st.warning("삭제할 입고행을 체크하세요.")
+        else:
+            stored_rows = _store_entered_rows(st, selected_order, entered)
+            selected_row_ids = {int(row.get("행번호", 0)) for _, row in selected_receipt_rows.iterrows()}
+            item_counts: dict[str, int] = {}
+            for row in stored_rows:
+                item_no = str(row.get("품목번호", ""))
+                item_counts[item_no] = item_counts.get(item_no, 0) + 1
+            next_rows = []
+            blocked = False
+            for row in stored_rows:
+                row_id = int(row.get("행번호", 0))
+                item_no = str(row.get("품목번호", ""))
+                if row_id in selected_row_ids:
+                    if item_counts.get(item_no, 0) <= 1:
+                        blocked = True
+                        next_rows.append(row)
+                    else:
+                        item_counts[item_no] -= 1
+                else:
+                    next_rows.append(row)
+            st.session_state[f"statement_receipt_rows_{selected_order}"] = next_rows
+            _bump_receipt_row_version(st, selected_order)
+            if blocked:
+                st.warning("품목별 최소 1개 입고행은 남겨야 합니다.")
+            st.rerun()
+
+    if substitute_col.button("대체품 입고", use_container_width=True, disabled=selected_items.empty, key=f"open_substitution_{selected_order}"):
         st.session_state[f"show_substitution_form_{selected_order}"] = True
         st.session_state[f"show_substitution_cancel_{selected_order}"] = False
 
@@ -330,6 +477,7 @@ def render(purchase_module, data) -> None:
                     substitution_state[str(source_item_no)] = {"제품": product_lookup[replacement_label], "대체사유": str(reason).strip()}
                     st.session_state[f"statement_substitution_state_{selected_order}"] = substitution_state
                     st.session_state[f"show_substitution_form_{selected_order}"] = False
+                    _bump_receipt_row_version(st, selected_order)
                     st.rerun()
             if close_col.button("닫기", use_container_width=True):
                 st.session_state[f"show_substitution_form_{selected_order}"] = False
@@ -352,6 +500,7 @@ def render(purchase_module, data) -> None:
                 substitution_state.pop(str(cancel_item_no), None)
                 st.session_state[f"statement_substitution_state_{selected_order}"] = substitution_state
                 st.session_state[f"show_substitution_cancel_{selected_order}"] = False
+                _bump_receipt_row_version(st, selected_order)
                 st.rerun()
             if close_col.button("닫기", use_container_width=True, key=f"close_substitution_cancel_{selected_order}"):
                 st.session_state[f"show_substitution_cancel_{selected_order}"] = False
@@ -359,25 +508,22 @@ def render(purchase_module, data) -> None:
 
     preview_rows = []
     expiry_errors = []
+    quantity_by_item: dict[str, int] = {}
+    remaining_by_item = {
+        item_no: _to_int(purchase_module, original.get("남은수량", 0))
+        for item_no, original in selected_lookup.items()
+    }
     for _, row in entered.iterrows():
         item_no = str(int(row["품목번호"]))
         original = selected_lookup.get(item_no)
         if original is None:
             continue
         quantity = _to_int(purchase_module, row.get("입고수량", 0))
-        remaining = _to_int(purchase_module, original.get("남은수량", 0))
         if quantity <= 0:
             continue
-        if quantity > remaining:
-            st.warning(f'{original.get("제품명", "")}의 입고수량은 남은수량을 초과할 수 없습니다.')
-            continue
+        quantity_by_item[item_no] = quantity_by_item.get(item_no, 0) + quantity
         substitution = substitution_state.get(item_no)
-        actual = substitution.get("제품", {}) if substitution else {
-            "제품코드": str(original.get("제품코드", "") or ""),
-            "정식제품명": str(original.get("제품명", "") or ""),
-            "규격": str(original.get("규격", "") or ""),
-            "단위": str(original.get("포장단위", "") or ""),
-        }
+        actual = _actual_for_item(original, substitution)
         try:
             expiry = _normalize_expiry(row.get("유통기한", ""))
         except ValueError as exc:
@@ -402,6 +548,16 @@ def render(purchase_module, data) -> None:
             "유통기한": expiry,
         })
 
+    quantity_errors = []
+    for item_no, total_quantity in quantity_by_item.items():
+        remaining = remaining_by_item.get(item_no, 0)
+        if total_quantity > remaining:
+            product_name = str(selected_lookup.get(item_no, {}).get("제품명", ""))
+            quantity_errors.append(
+                f"{product_name}의 입고수량 합계가 남은수량을 초과했습니다. "
+                f"남은수량 {remaining:,}개 / 입력수량 {total_quantity:,}개"
+            )
+
     preview = pd.DataFrame(preview_rows)
     product_total = int(preview["상품금액"].sum()) if not preview.empty else 0
     a, b, c = st.columns(3)
@@ -412,6 +568,9 @@ def render(purchase_module, data) -> None:
     if st.button("거래명세서 저장", type="primary", use_container_width=True):
         if expiry_errors:
             st.warning("\n".join(dict.fromkeys(expiry_errors)))
+            return
+        if quantity_errors:
+            st.warning("\n".join(quantity_errors))
             return
         if preview.empty:
             st.warning("입고할 품목을 선택하고 입고수량을 입력하세요.")
@@ -462,6 +621,9 @@ def render(purchase_module, data) -> None:
             f"statement_substitution_state_{selected_order}",
             f"show_substitution_form_{selected_order}",
             f"show_substitution_cancel_{selected_order}",
+            f"statement_receipt_rows_{selected_order}",
+            f"statement_receipt_rows_version_{selected_order}",
+            f"statement_receipt_next_row_id_{selected_order}",
         ]:
             st.session_state.pop(key, None)
         st.success(f"{statement_number}번 거래명세서를 저장했습니다: {sid}")
