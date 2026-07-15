@@ -22,6 +22,7 @@ def build_application(base_dir: Path):
     from repositories.order_repository import OrderRepository
     from ui.pages.router import run as run_pages
     from ui.preview_layout import render_order_html
+    from ui.purchase_preview import render as render_purchase_preview
 
     import core_app
     sys.modules["app"] = core_app
@@ -37,6 +38,9 @@ def build_application(base_dir: Path):
     # 레거시 모듈 로딩이 끝난 뒤 최종 미리보기 렌더러를 적용합니다.
     core_app.render_order_html = lambda vendor, items, note, order_id=None, order_date=None: render_order_html(
         core_app, vendor, items, note, order_id=order_id, order_date=order_date
+    )
+    core_app.render_purchase_preview = lambda vendor, items, note, order_date=None: render_purchase_preview(
+        core_app, vendor, items, note, order_date=order_date
     )
 
     if db_status.get("ok"):
