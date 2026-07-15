@@ -1,4 +1,4 @@
-"""대체입고를 지원하는 거래명세서 등록 화면."""
+"""대체입고와 제조번호·유통기한 입력을 지원하는 거래명세서 등록 화면."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -97,6 +97,8 @@ def _editor_rows(purchase_module, order_rows, statements, statement_items, selec
             "실제 입고제품": actual_default,
             "이번입고수량": remaining,
             "매입단가": 0,
+            "제조번호": "",
+            "유통기한": "",
             "현재 가격 적용": True,
             "대체사유": "",
         })
@@ -111,7 +113,10 @@ def render(purchase_module, data) -> None:
     statements, statement_items, price_history, _ = purchase_module.load_purchase_data()
 
     st.markdown("## 거래명세서 등록")
-    st.caption("발주품목과 실제 입고품목이 다르면 실제 입고제품을 변경하세요. 원발주품목은 별도로 보존됩니다.")
+    st.caption(
+        "발주품목과 실제 입고품목이 다르면 실제 입고제품을 변경하세요. "
+        "제조번호와 유통기한은 거래명세표에 적혀 있을 때만 선택 입력하면 됩니다."
+    )
 
     if orders.empty:
         st.info("등록된 발주서가 없습니다.")
@@ -147,7 +152,10 @@ def render(purchase_module, data) -> None:
         memo = c3.text_area("메모", height=88)
 
     st.markdown("### 실제 입고품목 및 매입가 입력")
-    st.caption("실제 입고제품을 바꾸면 대체입고로 처리됩니다. 대체입고 행에는 대체사유를 입력하세요.")
+    st.caption(
+        "실제 입고제품을 바꾸면 대체입고로 처리됩니다. 대체입고 행에는 대체사유를 입력하세요. "
+        "제조번호와 유통기한은 비워두어도 저장됩니다."
+    )
     editor_source = _editor_rows(
         purchase_module, order_rows, statements, statement_items, selected_order, product_names
     )
@@ -160,9 +168,15 @@ def render(purchase_module, data) -> None:
             "발주수량", "누적입고수량", "남은수량",
         ],
         column_config={
-            "실제 입고제품": st.column_config.SelectboxColumn("실제 입고제품", options=product_names, required=True, width="large"),
+            "실제 입고제품": st.column_config.SelectboxColumn(
+                "실제 입고제품", options=product_names, required=True, width="large"
+            ),
             "이번입고수량": st.column_config.NumberColumn("이번 입고수량", min_value=0, step=1),
             "매입단가": st.column_config.NumberColumn("매입단가", min_value=0, step=100),
+            "제조번호": st.column_config.TextColumn("제조번호", width="medium"),
+            "유통기한": st.column_config.TextColumn(
+                "유통기한", help="예: 2028-03-01, 28.3.1, 20280301", width="medium"
+            ),
             "현재 가격 적용": st.column_config.CheckboxColumn("현재 가격 적용"),
             "대체사유": st.column_config.TextColumn("대체사유", width="medium"),
         },
@@ -195,6 +209,8 @@ def render(purchase_module, data) -> None:
             "원발주단위": str(row.get("원발주단위", "") or ""),
             "입고유형": receipt_type,
             "대체사유": str(row.get("대체사유", "") or "").strip(),
+            "제조번호": str(row.get("제조번호", "") or "").strip(),
+            "유통기한": str(row.get("유통기한", "") or "").strip(),
         })
     preview = pd.DataFrame(preview_rows)
 
@@ -214,7 +230,10 @@ def render(purchase_module, data) -> None:
         if (preview["매입단가"] <= 0).any():
             st.warning("입고 품목의 매입단가를 입력하세요.")
             return
-        missing_reason = preview[(preview["입고유형"] == "대체입고") & (preview["대체사유"].astype(str).str.strip() == "")]
+        missing_reason = preview[
+            (preview["입고유형"] == "대체입고")
+            & (preview["대체사유"].astype(str).str.strip() == "")
+        ]
         if not missing_reason.empty:
             st.warning("대체입고 품목에는 대체사유를 입력하세요.")
             return
