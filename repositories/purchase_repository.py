@@ -16,6 +16,7 @@ STATEMENT_ITEM_COLUMNS = [
     "명세서ID", "순번", "제품코드", "정식제품명", "규격", "단위", "발주수량",
     "입고수량", "매입단가", "상품금액", "출고단가", "가격적용여부",
     "원발주제품코드", "원발주제품명", "원발주규격", "원발주단위", "입고유형", "대체사유",
+    "제조번호", "유통기한",
 ]
 PRICE_HISTORY_COLUMNS = [
     "가격ID", "명세서ID", "명세서일자", "제품코드", "정식제품명", "매입단가", "출고단가", "등록일시",
@@ -38,6 +39,8 @@ def _ensure_substitution_columns(conn) -> None:
         "original_packaging_unit": "TEXT",
         "receipt_type": "TEXT",
         "substitution_reason": "TEXT",
+        "lot_number": "TEXT",
+        "expiry_date": "TEXT",
     }
     for column, sql_type in additions.items():
         if column not in existing:
@@ -58,7 +61,8 @@ def load_all(data_dir: Path):
                    packaging_unit, ordered_quantity, received_quantity, purchase_price,
                    product_amount, sale_price, apply_price,
                    original_product_code, original_product_name, original_specification,
-                   original_packaging_unit, receipt_type, substitution_reason
+                   original_packaging_unit, receipt_type, substitution_reason,
+                   lot_number, expiry_date
             FROM statement_items ORDER BY statement_id, sequence, id
         """).fetchall(), STATEMENT_ITEM_COLUMNS)
         prices = _frame(conn.execute("""
@@ -112,6 +116,7 @@ def replace_statement_items(data_dir: Path, df: pd.DataFrame) -> None:
         normalize_product_code(r.get("원발주제품코드", "")), str(r.get("원발주제품명", "")),
         str(r.get("원발주규격", "")), str(r.get("원발주단위", "")),
         str(r.get("입고유형", "")), str(r.get("대체사유", "")),
+        str(r.get("제조번호", "")), str(r.get("유통기한", "")),
     ) for _, r in clean.iterrows() if str(r.get("명세서ID", "")).strip()]
     with transaction(data_dir) as conn:
         _ensure_substitution_columns(conn)
@@ -120,8 +125,8 @@ def replace_statement_items(data_dir: Path, df: pd.DataFrame) -> None:
             INSERT INTO statement_items(statement_id,sequence,product_code,product_name,specification,
             packaging_unit,ordered_quantity,received_quantity,purchase_price,product_amount,sale_price,
             apply_price,original_product_code,original_product_name,original_specification,
-            original_packaging_unit,receipt_type,substitution_reason)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            original_packaging_unit,receipt_type,substitution_reason,lot_number,expiry_date)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, rows)
 
 
