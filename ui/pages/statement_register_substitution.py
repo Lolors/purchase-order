@@ -1,6 +1,7 @@
-"""표 입력과 선택 품목 대체를 지원하는 거래명세서 등록 화면."""
+"""단계별 품목 선택·입력과 대체입고를 지원하는 거래명세서 등록 화면."""
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 import pandas as pd
@@ -78,19 +79,17 @@ def _catalog(products: pd.DataFrame) -> tuple[list[str], dict[str, dict]]:
 
 
 def _next_statement_number(statements: pd.DataFrame, order_id: str) -> int:
-    """선택 발주서에 연결된 명세서의 다음 순번을 계산합니다."""
     linked = statements[statements["발주ID"].astype(str) == str(order_id)]
     numbers = []
     for value in linked.get("명세서번호", pd.Series(dtype=str)).tolist():
-        text = str(value or "").strip()
         try:
-            numbers.append(int(float(text)))
+            numbers.append(int(float(str(value or "").strip())))
         except (TypeError, ValueError):
             continue
-    return (max(numbers) + 1) if numbers else 1
+    return max(numbers) + 1 if numbers else 1
 
 
-def _editor_rows(purchase_module, order_rows, statements, statement_items, selected_order):
+def _selection_rows(purchase_module, order_rows, statements, statement_items, selected_order):
     received = _received_by_order(purchase_module, statements, statement_items, selected_order)
     rows = []
     for source_index, (_, row) in enumerate(order_rows.reset_index(drop=True).iterrows()):
@@ -109,11 +108,6 @@ def _editor_rows(purchase_module, order_rows, statements, statement_items, selec
             "발주수량": ordered_qty,
             "누적입고": received_qty,
             "남은수량": remaining,
-            "이번입고수량": remaining,
-            "매입단가": 0,
-            "제조번호": "",
-            "유통기한": "",
-            "현재 가격 적용": True,
         })
     return pd.DataFrame(rows)
 
@@ -127,6 +121,33 @@ def _substitution_state(st, selected_order: str) -> dict[str, dict]:
     return state
 
 
+def _normalize_expiry(value) -> str:
+    """다양한 날짜 표기를 YYYY-MM-DD로 정규화합니다. 빈값은 허용합니다."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    digits = re.sub(r"\D", "", text)
+    year = month = day = None
+    if len(digits) == 8:
+        year, month, day = int(digits[:4]), int(digits[4:6]), int(digits[6:8])
+    elif len(digits) == 6:
+        year, month, day = 2000 + int(digits[:2]), int(digits[2:4]), int(digits[4:6])
+    else:
+        parts = [part for part in re.split(r"[^0-9]+", text) if part]
+        if len(parts) == 3:
+            year = int(parts[0])
+            year = 2000 + year if year < 100 else year
+            month, day = int(parts[1]), int(parts[2])
+
+    if year is None or month is None or day is None:
+        raise ValueError(f"유통기한 형식을 확인하세요: {text}")
+    try:
+        return datetime(year, month, day).strftime("%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError(f"유효하지 않은 유통기한입니다: {text}") from exc
+
+
 def render(purchase_module, data) -> None:
     st = purchase_module.st
     orders = data["orders"].copy()
@@ -135,9 +156,7 @@ def render(purchase_module, data) -> None:
     statements, statement_items, price_history, _ = purchase_module.load_purchase_data()
 
     st.markdown("## 거래명세서 등록")
-    st.caption(
-        "표에서 이번 입고수량과 매입정보를 입력하세요. 체크박스는 대체할 품목을 선택할 때만 사용합니다."
-    )
+    st.caption("거래명세서에 적힌 품목을 먼저 선택한 뒤, 선택된 품목의 입고정보를 아래 표에 입력하세요.")
 
     if orders.empty:
         st.info("등록된 발주서가 없습니다.")
@@ -167,28 +186,26 @@ def render(purchase_module, data) -> None:
     statement_number = _next_statement_number(statements, selected_order)
     with st.container(border=True):
         st.markdown("### 명세서 기본 정보")
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3 = st.columns([1, 1, 2])
         c1.text_input(
             "거래명세서 번호",
             value=str(statement_number),
             disabled=True,
             help="이 발주서에 연결된 거래명세서 순서에 따라 자동으로 생성됩니다.",
         )
-        statement_date = c1.date_input("거래명세서 일자", value=datetime.now().date())
-        freight = c2.number_input("운송비(배송비)", min_value=0, value=0, step=1000)
-        freight_checked = c2.checkbox("운송비 입력 완료", value=False)
+        statement_date = c2.date_input("거래명세서 일자", value=datetime.now().date())
         memo = c3.text_area("메모", height=88)
 
-    st.markdown("### 품목별 입고정보 입력")
-    editor_source = _editor_rows(
+    st.markdown("### 거래명세서에 적힌 품목 선택")
+    selection_source = _selection_rows(
         purchase_module, order_rows, statements, statement_items, selected_order
     )
-    if editor_source.empty:
+    if selection_source.empty:
         st.info("이 발주서에는 입고가 남은 품목이 없습니다.")
         return
 
-    edited = st.data_editor(
-        editor_source,
+    selection_editor = st.data_editor(
+        selection_source,
         use_container_width=True,
         hide_index=True,
         disabled=[
@@ -196,28 +213,21 @@ def render(purchase_module, data) -> None:
             "발주수량", "누적입고", "남은수량",
         ],
         column_config={
-            "선택": st.column_config.CheckboxColumn("선택", width="small", help="대체할 품목만 체크하세요."),
+            "선택": st.column_config.CheckboxColumn("선택", width="small"),
             "품목번호": None,
             "제품명": st.column_config.TextColumn("제품명", width="large"),
-            "이번입고수량": st.column_config.NumberColumn("이번 입고수량", min_value=0, step=1),
-            "매입단가": st.column_config.NumberColumn("매입단가", min_value=0, step=100),
-            "제조번호": st.column_config.TextColumn("제조번호", width="medium"),
-            "유통기한": st.column_config.TextColumn(
-                "유통기한", help="예: 2028-03-01, 28.3.1, 20280301", width="medium"
-            ),
-            "현재 가격 적용": st.column_config.CheckboxColumn("현재 가격 적용"),
         },
-        key=f"statement_items_table_{selected_order}",
+        key=f"statement_item_selection_{selected_order}",
     )
+    selected_items = selection_editor[selection_editor["선택"] == True].copy()  # noqa: E712
 
-    selected_for_substitution = edited[edited["선택"] == True].copy()  # noqa: E712
     substitution_state = _substitution_state(st, selected_order)
-    action_col, cancel_col, _ = st.columns([1, 1, 3])
+    action_col, cancel_col, spacer_col, freight_col = st.columns([1, 1, 2.5, 1.5])
     if action_col.button("대체", type="primary", use_container_width=True):
-        if selected_for_substitution.empty:
-            st.warning("대체할 품목을 먼저 체크하세요.")
+        if selected_items.empty:
+            st.warning("대체할 품목을 먼저 선택하세요.")
         else:
-            for _, row in selected_for_substitution.iterrows():
+            for _, row in selected_items.iterrows():
                 item_no = str(int(row["품목번호"]))
                 original_name = str(row.get("제품명", "") or "")
                 current = substitution_state.get(item_no, {})
@@ -229,19 +239,26 @@ def render(purchase_module, data) -> None:
             st.rerun()
 
     if cancel_col.button("대체 취소", use_container_width=True):
-        if selected_for_substitution.empty:
-            st.warning("대체를 취소할 품목을 먼저 체크하세요.")
+        if selected_items.empty:
+            st.warning("대체를 취소할 품목을 먼저 선택하세요.")
         else:
-            for _, row in selected_for_substitution.iterrows():
+            for _, row in selected_items.iterrows():
                 substitution_state.pop(str(int(row["품목번호"])), None)
             st.session_state[f"statement_substitution_state_{selected_order}"] = substitution_state
             st.rerun()
 
-    substitution_rows = []
+    freight = freight_col.number_input(
+        "운송비(배송비)", min_value=0, value=0, step=1000, key=f"statement_freight_{selected_order}"
+    )
+    freight_checked = freight_col.checkbox(
+        "운송비 입력 완료", value=False, key=f"statement_freight_checked_{selected_order}"
+    )
+
     source_by_item = {
         str(int(row["품목번호"])): row
-        for _, row in edited.iterrows()
+        for _, row in selection_editor.iterrows()
     }
+    substitution_rows = []
     for item_no, values in substitution_state.items():
         source = source_by_item.get(str(item_no))
         if source is None:
@@ -279,21 +296,73 @@ def render(purchase_module, data) -> None:
         }
         st.session_state[f"statement_substitution_state_{selected_order}"] = substitution_state
 
-    preview_rows = []
-    for _, row in edited.iterrows():
-        quantity = _to_int(purchase_module, row.get("이번입고수량", 0))
-        if quantity <= 0:
-            continue
-        remaining = _to_int(purchase_module, row.get("남은수량", 0))
-        if quantity > remaining:
-            st.warning(f'{row.get("제품명", "")}의 이번 입고수량은 남은수량을 초과할 수 없습니다.')
-            continue
+    st.markdown("### 선택 품목 입고정보 입력")
+    st.caption("유통기한은 20280111, 28.9.1, 28/9/1처럼 입력해도 저장 시 YYYY-MM-DD로 통일됩니다.")
 
+    input_rows = []
+    for _, row in selected_items.iterrows():
         item_no = str(int(row["품목번호"]))
         original_name = str(row.get("제품명", "") or "")
-        original_code = str(row.get("제품코드", "") or "")
-        original_spec = str(row.get("규격", "") or "")
-        original_unit = str(row.get("포장단위", "") or "")
+        substitution = substitution_state.get(item_no)
+        actual_name = str(substitution.get("제품명", "") or "") if substitution else original_name
+        actual = product_lookup.get(actual_name)
+        actual_spec = str(actual.get("규격", "") or "") if actual else str(row.get("규격", "") or "")
+        input_rows.append({
+            "품목번호": int(item_no),
+            "제품명": actual_name,
+            "규격": actual_spec,
+            "입고수량": _to_int(purchase_module, row.get("남은수량", 0)),
+            "매입단가": 0,
+            "제조번호": "",
+            "유통기한": "",
+            "현재 가격 적용": True,
+        })
+
+    if not input_rows:
+        st.info("위 표에서 거래명세서에 적힌 품목을 선택하세요.")
+        entered = pd.DataFrame()
+    else:
+        entered = st.data_editor(
+            pd.DataFrame(input_rows),
+            use_container_width=True,
+            hide_index=True,
+            disabled=["품목번호", "제품명", "규격"],
+            column_config={
+                "품목번호": None,
+                "제품명": st.column_config.TextColumn("제품명", width="large"),
+                "규격": st.column_config.TextColumn("규격", width="medium"),
+                "입고수량": st.column_config.NumberColumn("입고수량", min_value=0, step=1),
+                "매입단가": st.column_config.NumberColumn("매입단가", min_value=0, step=100),
+                "제조번호": st.column_config.TextColumn("제조번호", width="medium"),
+                "유통기한": st.column_config.TextColumn("유통기한", width="medium"),
+                "현재 가격 적용": st.column_config.CheckboxColumn("현재 가격 적용"),
+            },
+            key=f"statement_receipt_input_{selected_order}",
+        )
+
+    preview_rows = []
+    expiry_errors = []
+    selected_lookup = {
+        str(int(row["품목번호"])): row
+        for _, row in selected_items.iterrows()
+    }
+    for _, row in entered.iterrows():
+        item_no = str(int(row["품목번호"]))
+        original = selected_lookup.get(item_no)
+        if original is None:
+            continue
+        quantity = _to_int(purchase_module, row.get("입고수량", 0))
+        remaining = _to_int(purchase_module, original.get("남은수량", 0))
+        if quantity <= 0:
+            continue
+        if quantity > remaining:
+            st.warning(f'{original.get("제품명", "")}의 입고수량은 남은수량을 초과할 수 없습니다.')
+            continue
+
+        original_name = str(original.get("제품명", "") or "")
+        original_code = str(original.get("제품코드", "") or "")
+        original_spec = str(original.get("규격", "") or "")
+        original_unit = str(original.get("포장단위", "") or "")
         substitution = substitution_state.get(item_no)
         actual_name = str(substitution.get("제품명", "") or "") if substitution else original_name
         reason = str(substitution.get("대체사유", "") or "").strip() if substitution else ""
@@ -308,10 +377,15 @@ def render(purchase_module, data) -> None:
         if actual is None:
             continue
 
+        try:
+            expiry = _normalize_expiry(row.get("유통기한", ""))
+        except ValueError as exc:
+            expiry_errors.append(str(exc))
+            expiry = ""
         price = _to_int(purchase_module, row.get("매입단가", 0))
         preview_rows.append({
             **actual,
-            "발주수량": _to_int(purchase_module, row.get("발주수량", 0)),
+            "발주수량": _to_int(purchase_module, original.get("발주수량", 0)),
             "입고수량": quantity,
             "매입단가": price,
             "상품금액": quantity * price,
@@ -324,7 +398,7 @@ def render(purchase_module, data) -> None:
             "입고유형": "대체입고" if substitution else "정상입고",
             "대체사유": reason,
             "제조번호": str(row.get("제조번호", "") or "").strip(),
-            "유통기한": str(row.get("유통기한", "") or "").strip(),
+            "유통기한": expiry,
         })
 
     preview = pd.DataFrame(preview_rows)
@@ -335,8 +409,17 @@ def render(purchase_module, data) -> None:
     c.metric("총 매입금액", f"{product_total + int(freight):,}원")
 
     if st.button("거래명세서 저장", type="primary", use_container_width=True):
+        if selected_items.empty:
+            st.warning("거래명세서에 적힌 품목을 선택하세요.")
+            return
+        if expiry_errors:
+            st.warning(expiry_errors[0])
+            return
         if preview.empty:
-            st.warning("이번 입고수량이 1 이상인 품목을 입력하세요.")
+            st.warning("선택 품목의 입고수량을 1 이상 입력하세요.")
+            return
+        if len(preview) != len(selected_items):
+            st.warning("선택한 모든 품목의 입고수량을 1 이상 입력하세요.")
             return
         if (preview["매입단가"] <= 0).any():
             st.warning("입고 품목의 매입단가를 입력하세요.")
