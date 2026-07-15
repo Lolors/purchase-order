@@ -35,6 +35,28 @@ def build_application(base_dir: Path):
     purchase = final_app.purchase
     purchase.STATEMENT_ITEM_COLUMNS = purchase_repository.STATEMENT_ITEM_COLUMNS
 
+    # 거래명세서 대체사유는 자유입력 대신 업무에서 사용하는 고정 선택지로 제한합니다.
+    original_text_input = core_app.st.text_input
+
+    def text_input_with_substitution_reason(label, *args, **kwargs):
+        if str(label) != "대체사유":
+            return original_text_input(label, *args, **kwargs)
+
+        selectbox_kwargs = {
+            key: kwargs[key]
+            for key in ("key", "help", "disabled", "label_visibility", "on_change", "args", "kwargs")
+            if key in kwargs
+        }
+        return core_app.st.selectbox(
+            "대체사유",
+            ["브랜드 대체", "발주 실수", "구매자 변심", "기타"],
+            index=0,
+            **selectbox_kwargs,
+        )
+
+    core_app.st.text_input = text_input_with_substitution_reason
+    purchase.st.text_input = text_input_with_substitution_reason
+
     # 레거시 모듈 로딩이 끝난 뒤 최종 미리보기 렌더러를 적용합니다.
     core_app.render_order_html = lambda vendor, items, note, order_id=None, order_date=None: render_order_html(
         core_app, vendor, items, note, order_id=order_id, order_date=order_date
