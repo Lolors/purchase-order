@@ -57,6 +57,90 @@ def build_application(base_dir: Path):
     core_app.st.text_input = text_input_with_substitution_reason
     purchase.st.text_input = text_input_with_substitution_reason
 
+    # 입고정보 표는 data_editor의 연속 편집 과정에서 값이 되돌아가는 문제가 있어
+    # 행번호별 고정 키를 가진 개별 입력 위젯으로 렌더링합니다.
+    original_data_editor = core_app.st.data_editor
+
+    def stable_receipt_editor(data, *args, **kwargs):
+        widget_key = str(kwargs.get("key") or "")
+        if not widget_key.startswith("statement_receipt_input_"):
+            return original_data_editor(data, *args, **kwargs)
+        if data is None or getattr(data, "empty", True):
+            return data
+
+        result = data.copy()
+        widths = [0.72, 2.55, 0.95, 1.0, 1.15, 1.15, 1.2, 0.85]
+        headers = core_app.st.columns(widths, gap="small")
+        for column, title in zip(
+            headers,
+            ["복사/삭제", "제품명", "규격", "입고수량", "매입단가", "제조번호", "유통기한", "가격 적용"],
+        ):
+            column.markdown(
+                f"<div style='font-size:13px;font-weight:700;color:#475569;padding:0 2px 6px;'>{title}</div>",
+                unsafe_allow_html=True,
+            )
+
+        for index, row in result.iterrows():
+            row_id = int(row.get("행번호", index))
+            key_prefix = f"{widget_key}_row_{row_id}"
+            columns = core_app.st.columns(widths, gap="small")
+
+            result.at[index, "복사/삭제"] = columns[0].checkbox(
+                "복사/삭제",
+                value=bool(row.get("복사/삭제", False)),
+                key=f"{key_prefix}_selected",
+                label_visibility="collapsed",
+            )
+            columns[1].markdown(
+                f"<div style='min-height:38px;display:flex;align-items:center;font-size:14px;padding:0 4px;'>"
+                f"{str(row.get('제품명', '') or '')}</div>",
+                unsafe_allow_html=True,
+            )
+            columns[2].markdown(
+                f"<div style='min-height:38px;display:flex;align-items:center;font-size:13px;padding:0 4px;'>"
+                f"{str(row.get('규격', '') or '')}</div>",
+                unsafe_allow_html=True,
+            )
+            result.at[index, "입고수량"] = columns[3].number_input(
+                "입고수량",
+                min_value=0,
+                value=max(0, int(float(row.get("입고수량", 0) or 0))),
+                step=1,
+                key=f"{key_prefix}_quantity",
+                label_visibility="collapsed",
+            )
+            result.at[index, "매입단가"] = columns[4].number_input(
+                "매입단가",
+                min_value=0,
+                value=max(0, int(float(row.get("매입단가", 0) or 0))),
+                step=100,
+                key=f"{key_prefix}_price",
+                label_visibility="collapsed",
+            )
+            result.at[index, "제조번호"] = columns[5].text_input(
+                "제조번호",
+                value=str(row.get("제조번호", "") or ""),
+                key=f"{key_prefix}_lot",
+                label_visibility="collapsed",
+            )
+            result.at[index, "유통기한"] = columns[6].text_input(
+                "유통기한",
+                value=str(row.get("유통기한", "") or ""),
+                key=f"{key_prefix}_expiry",
+                label_visibility="collapsed",
+            )
+            result.at[index, "현재 가격 적용"] = columns[7].checkbox(
+                "현재 가격 적용",
+                value=bool(row.get("현재 가격 적용", True)),
+                key=f"{key_prefix}_apply_price",
+                label_visibility="collapsed",
+            )
+
+        return result
+
+    core_app.st.data_editor = stable_receipt_editor
+    purchase.st.data_editor = stable_receipt_editor
+
     # 레거시 모듈 로딩이 끝난 뒤 최종 미리보기 렌더러를 적용합니다.
     core_app.render_order_html = lambda vendor, items, note, order_id=None, order_date=None: render_order_html(
         core_app, vendor, items, note, order_id=order_id, order_date=order_date
