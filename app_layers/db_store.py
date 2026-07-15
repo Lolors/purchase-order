@@ -179,6 +179,22 @@ def _selected_order_date(base_app) -> date:
     return datetime.now().date()
 
 
+def _item_rows(order_id: str, order_items: list[dict]) -> list[tuple]:
+    rows = []
+    for idx, item in enumerate(order_items, 1):
+        rows.append((
+            order_id,
+            idx,
+            normalize_product_code(item.get("제품코드", "")),
+            str(item.get("제품명", item.get("정식제품명", "")) or ""),
+            str(item.get("검색별칭", "") or ""),
+            str(item.get("규격", "") or ""),
+            str(item.get("포장단위", item.get("단위", "")) or ""),
+            _to_int(item.get("수량", 0)),
+        ))
+    return rows
+
+
 def save_order(data_dir: Path, base_app, vendor_name: str, request_note: str, order_items: list[dict]) -> str:
     selected_date = _selected_order_date(base_app)
     now = datetime.now()
@@ -213,18 +229,60 @@ def save_order(data_dir: Path, base_app, vendor_name: str, request_note: str, or
             ),
         )
 
-        rows = []
-        for idx, item in enumerate(order_items, 1):
-            rows.append((
+        rows = _item_rows(order_id, order_items)
+        if rows:
+            conn.executemany(
+                """
+                INSERT INTO order_items(order_id,sequence,product_code,product_name,search_alias,specification,packaging_unit,quantity)
+                VALUES(?,?,?,?,?,?,?,?)
+                """,
+                rows,
+            )
+        conn.commit()
+    return order_id
+
+
+def update_order(data_dir: Path, base_app, order_id: str, vendor_name: str, request_note: str, order_items: list[dict]) -> str:
+    order_id = str(order_id or "").strip()
+    if not order_id:
+        raise ValueError("수정할 발주ID가 없습니다.")
+
+    selected_date = _selected_order_date(base_app)
+    total_count = len(order_items)
+    total_qty = sum(_to_int(item.get("수량", 0)) for item in order_items)
+
+    with _connect(data_dir) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT ordered_at, status FROM orders WHERE order_id = ?",
+            (order_id,),
+        ).fetchone()
+        if existing is None:
+            raise ValueError(f"수정할 발주서를 찾을 수 없습니다: {order_id}")
+
+        original_time = pd.to_datetime(existing[0], errors="coerce")
+        if pd.isna(original_time):
+            original_time = datetime.now()
+        ordered_at = datetime.combine(selected_date, original_time.time().replace(microsecond=0))
+
+        conn.execute(
+            """
+            UPDATE orders
+            SET ordered_at = ?, vendor_name = ?, request_note = ?,
+                total_item_count = ?, total_quantity = ?
+            WHERE order_id = ?
+            """,
+            (
+                ordered_at.strftime("%Y-%m-%d %H:%M:%S"),
+                str(vendor_name or "").strip(),
+                str(request_note or ""),
+                total_count,
+                total_qty,
                 order_id,
-                idx,
-                normalize_product_code(item.get("제품코드", "")),
-                str(item.get("제품명", item.get("정식제품명", "")) or ""),
-                str(item.get("검색별칭", "") or ""),
-                str(item.get("규격", "") or ""),
-                str(item.get("포장단위", item.get("단위", "")) or ""),
-                _to_int(item.get("수량", 0)),
-            ))
+            ),
+        )
+        conn.execute("DELETE FROM order_items WHERE order_id = ?", (order_id,))
+        rows = _item_rows(order_id, order_items)
         if rows:
             conn.executemany(
                 """
@@ -261,7 +319,6 @@ def delete_order(data_dir: Path, order_id: str) -> None:
 
 
 def activate(base_app) -> None:
-    """기존 앱의 제품·별칭·거래처·발주 읽기/저장을 SQLite 방식으로 교체합니다."""
     original_load_data: Callable = base_app.load_data
 
     def load_data_from_db():
