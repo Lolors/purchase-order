@@ -1,7 +1,10 @@
-"""행 클릭으로 발주서를 선택하는 발주서 목록 화면."""
+"""행 클릭과 검색 필터를 제공하는 발주서 목록 화면."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from pathlib import Path
+
+import pandas as pd
 
 from ui.pages import orders
 
@@ -18,6 +21,45 @@ def _selected_rows(event) -> list[int]:
     return list(getattr(selection, "rows", []) or [])
 
 
+def _filter_orders(headers, items, start_date, end_date, vendor_name, keyword):
+    """기간·거래처·품목 일부 일치 조건으로 발주서를 필터링합니다."""
+    filtered = headers.copy()
+    filtered["_ordered_date"] = pd.to_datetime(
+        filtered.get("발주일시", ""), errors="coerce"
+    ).dt.date
+    filtered = filtered[
+        (filtered["_ordered_date"] >= start_date)
+        & (filtered["_ordered_date"] <= end_date)
+    ]
+
+    if vendor_name != "전체":
+        filtered = filtered[filtered["거래처명"].astype(str) == vendor_name]
+
+    keyword_text = str(keyword or "").strip()
+    if keyword_text:
+        item_rows = items.copy()
+        for column in ["발주ID", "제품코드", "정식제품명", "규격"]:
+            if column not in item_rows.columns:
+                item_rows[column] = ""
+        match = (
+            item_rows["제품코드"].astype(str).str.contains(
+                keyword_text, case=False, na=False, regex=False
+            )
+            | item_rows["정식제품명"].astype(str).str.contains(
+                keyword_text, case=False, na=False, regex=False
+            )
+            | item_rows["규격"].astype(str).str.contains(
+                keyword_text, case=False, na=False, regex=False
+            )
+        )
+        matching_order_ids = set(item_rows.loc[match, "발주ID"].astype(str))
+        filtered = filtered[
+            filtered["발주ID"].astype(str).isin(matching_order_ids)
+        ]
+
+    return filtered.drop(columns=["_ordered_date"], errors="ignore")
+
+
 def render(core_app, data, purchase_module=None) -> None:
     st = core_app.st
     vendors = data["vendors"]
@@ -29,7 +71,54 @@ def render(core_app, data, purchase_module=None) -> None:
         st.info("발주서가 없습니다.")
         return
 
-    display_headers = headers.copy().reset_index(drop=True)
+    today = datetime.now().date()
+    vendor_options = ["전체"] + sorted(
+        headers["거래처명"].astype(str).replace("", pd.NA).dropna().unique().tolist()
+    )
+    with st.container(border=True):
+        start_col, end_col, vendor_col, keyword_col = st.columns(
+            [1, 1, 1.5, 3], gap="small"
+        )
+        start_date = start_col.date_input(
+            "시작일",
+            value=today - timedelta(days=30),
+            key="order_list_start_date",
+        )
+        end_date = end_col.date_input(
+            "종료일",
+            value=today,
+            key="order_list_end_date",
+        )
+        vendor_name = vendor_col.selectbox(
+            "거래처",
+            vendor_options,
+            key="order_list_vendor",
+        )
+        keyword = keyword_col.text_input(
+            "발주 품목 검색",
+            placeholder="제품명, 제품코드 또는 규격 일부 입력",
+            key="order_list_product_keyword",
+        )
+
+    if start_date > end_date:
+        st.warning("시작일은 종료일보다 늦을 수 없습니다.")
+        return
+
+    filtered_headers = _filter_orders(
+        headers,
+        items,
+        start_date,
+        end_date,
+        vendor_name,
+        keyword,
+    )
+    if filtered_headers.empty:
+        st.info("검색 조건에 맞는 발주서가 없습니다.")
+        return
+
+    display_headers = filtered_headers.sort_values(
+        "발주일시", ascending=False
+    ).reset_index(drop=True)
     if "상태" not in display_headers.columns:
         display_headers["상태"] = "발주완료"
 
@@ -43,7 +132,9 @@ def render(core_app, data, purchase_module=None) -> None:
             axis=1,
         )
 
-    st.caption("발주ID가 있는 행을 클릭하면 아래에 해당 발주서 내용이 표시됩니다.")
+    st.caption(
+        f"검색 결과 {len(display_headers):,}건 · 발주ID가 있는 행을 클릭하면 아래에 내용이 표시됩니다."
+    )
     event = st.dataframe(
         orders._style_status_column(display_headers),
         use_container_width=True,
