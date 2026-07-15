@@ -173,15 +173,28 @@ def render(core_app, data, purchase_module=None) -> None:
         ]
         st.dataframe(detail[cols], use_container_width=True, hide_index=True)
 
-    c1, c2, c3 = st.columns(3)
-    if c1.button("복사하여 새 발주", use_container_width=True, key=f"copy_order_{selected}"):
+    c1, c2, c3, c4 = st.columns(4)
+    if c1.button("수정", type="primary", use_container_width=True, key=f"edit_order_{selected}"):
         st.session_state.order_items = orders._normalise_items(core_app, detail)
         st.session_state.loaded_vendor_name = str(header.get("거래처명", ""))
         st.session_state.loaded_request_note = str(header.get("요청사항", ""))
+        ordered_at = pd.to_datetime(header.get("발주일시", ""), errors="coerce")
+        if not pd.isna(ordered_at):
+            st.session_state["order_date"] = ordered_at.date()
+        st.session_state["editing_order_id"] = selected
+        st.session_state.pop("order_excel_export", None)
         st.session_state.current_page = "발주 작성"
         st.rerun()
 
-    if c2.button("삭제", use_container_width=True, key=f"delete_order_{selected}"):
+    if c2.button("복사하여 새 발주", use_container_width=True, key=f"copy_order_{selected}"):
+        st.session_state.order_items = orders._normalise_items(core_app, detail)
+        st.session_state.loaded_vendor_name = str(header.get("거래처명", ""))
+        st.session_state.loaded_request_note = str(header.get("요청사항", ""))
+        st.session_state.pop("editing_order_id", None)
+        st.session_state.current_page = "발주 작성"
+        st.rerun()
+
+    if c3.button("삭제", use_container_width=True, key=f"delete_order_{selected}"):
         core_app.delete_order(selected)
         st.success("발주서와 연결 데이터가 삭제되었습니다.")
         st.rerun()
@@ -196,7 +209,7 @@ def render(core_app, data, purchase_module=None) -> None:
             header.get("요청사항", ""),
         )
         with open(export, "rb") as file:
-            c3.download_button(
+            c4.download_button(
                 "엑셀 다운로드",
                 file,
                 file_name=Path(export).name,
