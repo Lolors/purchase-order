@@ -11,8 +11,6 @@ from repositories import purchase_repository
 
 @st.cache_resource(show_spinner=False)
 def build_application(base_dir: Path):
-    # app_layers 안의 호환 모듈을 사용하는 Repository와 UI 모듈이 있으므로,
-    # 관련 모듈을 import하기 전에 먼저 경로를 등록해야 합니다.
     layer_dir = base_dir / "app_layers"
     if str(layer_dir) not in sys.path:
         sys.path.insert(0, str(layer_dir))
@@ -30,12 +28,10 @@ def build_application(base_dir: Path):
     import db_migration
     db_status = db_migration.initialize_database(core_app.DATA)
 
-    # 레거시 모듈은 아직 거래명세서 페이지 구현 제공자로만 사용합니다.
     import app_order_review as final_app
     purchase = final_app.purchase
     purchase.STATEMENT_ITEM_COLUMNS = purchase_repository.STATEMENT_ITEM_COLUMNS
 
-    # 거래명세서 대체사유는 자유입력 대신 업무에서 사용하는 고정 선택지로 제한합니다.
     original_text_input = core_app.st.text_input
 
     def text_input_with_substitution_reason(label, *args, **kwargs):
@@ -57,8 +53,6 @@ def build_application(base_dir: Path):
     core_app.st.text_input = text_input_with_substitution_reason
     purchase.st.text_input = text_input_with_substitution_reason
 
-    # 입고정보 표는 data_editor의 연속 편집 과정에서 값이 되돌아가는 문제가 있어
-    # 행번호별 고정 키를 가진 개별 입력 위젯으로 렌더링합니다.
     original_data_editor = core_app.st.data_editor
 
     def stable_receipt_editor(data, *args, **kwargs):
@@ -109,12 +103,11 @@ def build_application(base_dir: Path):
                 key=f"{key_prefix}_quantity",
                 label_visibility="collapsed",
             )
-            result.at[index, "매입단가"] = columns[4].number_input(
+            result.at[index, "매입단가"] = columns[4].text_input(
                 "매입단가",
-                min_value=0,
-                value=max(0, int(float(row.get("매입단가", 0) or 0))),
-                step=100,
-                key=f"{key_prefix}_price",
+                value="" if str(row.get("매입단가", "") or "").strip() in {"", "0", "0.0"} else str(row.get("매입단가", "")),
+                key=f"{key_prefix}_price_v2",
+                placeholder="단가 입력",
                 label_visibility="collapsed",
             )
             result.at[index, "제조번호"] = columns[5].text_input(
@@ -141,7 +134,6 @@ def build_application(base_dir: Path):
     core_app.st.data_editor = stable_receipt_editor
     purchase.st.data_editor = stable_receipt_editor
 
-    # 레거시 모듈 로딩이 끝난 뒤 최종 미리보기 렌더러를 적용합니다.
     core_app.render_order_html = lambda vendor, items, note, order_id=None, order_date=None: render_order_html(
         core_app, vendor, items, note, order_id=order_id, order_date=order_date
     )
@@ -192,7 +184,12 @@ def build_application(base_dir: Path):
             clear_data_cache()
 
         def save_order(vendor_name, request_note, items):
-            order_id = order_repo.save(vendor_name, request_note, items)
+            editing_order_id = str(core_app.st.session_state.get("editing_order_id", "") or "").strip()
+            if editing_order_id:
+                order_id = order_repo.update(editing_order_id, vendor_name, request_note, items)
+                core_app.st.session_state.pop("editing_order_id", None)
+            else:
+                order_id = order_repo.save(vendor_name, request_note, items)
             clear_data_cache()
             return order_id
 
