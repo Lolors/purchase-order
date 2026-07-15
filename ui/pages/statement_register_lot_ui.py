@@ -8,10 +8,17 @@ import pandas as pd
 from ui.pages import statement_register_substitution as base
 
 
-def _blank_or_int(purchase_module, value):
-    if value is None or str(value).strip() == "":
+def _price_text(value) -> str:
+    """매입단가는 화면에서 공란을 유지하고 입력한 숫자 문자열을 그대로 보존합니다."""
+    if value is None:
         return ""
-    return base._to_int(purchase_module, value)
+    text = str(value).strip()
+    if text.lower() in {"nan", "none"}:
+        return ""
+    # 기존 숫자 상태가 0인 경우에도 새 입력 화면에서는 빈칸으로 보여줍니다.
+    if text in {"0", "0.0"}:
+        return ""
+    return text
 
 
 def _sync_receipt_rows(st, purchase_module, selected_order, selected_lookup, substitution_state):
@@ -42,7 +49,7 @@ def _sync_receipt_rows(st, purchase_module, selected_order, selected_lookup, sub
         row["규격"] = str(actual.get("규격", "") or original.get("규격", ""))
         row["복사/삭제"] = False
         row["입고수량"] = base._to_int(purchase_module, row.get("입고수량", 0))
-        row["매입단가"] = _blank_or_int(purchase_module, row.get("매입단가", ""))
+        row["매입단가"] = _price_text(row.get("매입단가", ""))
         row["제조번호"] = str(row.get("제조번호", "") or "")
         row["유통기한"] = str(row.get("유통기한", "") or "")
         row["현재 가격 적용"] = base._normalise_bool(row.get("현재 가격 적용", True))
@@ -55,12 +62,11 @@ def _store_entered_rows(st, selected_order: str, entered: pd.DataFrame) -> list[
     rows = []
     if entered is not None and not entered.empty:
         for _, row in entered.iterrows():
-            price_value = row.get("매입단가", "")
             rows.append({
                 "행번호": int(row.get("행번호", 0)),
                 "품목번호": int(row.get("품목번호", 0)),
                 "입고수량": int(float(row.get("입고수량", 0) or 0)),
-                "매입단가": "" if price_value is None or str(price_value).strip() == "" else int(float(price_value)),
+                "매입단가": _price_text(row.get("매입단가", "")),
                 "제조번호": str(row.get("제조번호", "") or "").strip(),
                 "유통기한": str(row.get("유통기한", "") or "").strip(),
                 "현재 가격 적용": base._normalise_bool(row.get("현재 가격 적용", True)),
@@ -76,7 +82,11 @@ base._store_entered_rows = _store_entered_rows
 _render_source = inspect.getsource(base.render)
 _render_source = _render_source.replace(
     '"매입단가": _to_int(purchase_module, row.get("매입단가", 0)),',
-    '"매입단가": row.get("매입단가", ""),',
+    '"매입단가": _price_text(row.get("매입단가", "")),',
+)
+_render_source = _render_source.replace(
+    '"매입단가": st.column_config.NumberColumn("매입단가", min_value=0, step=100, width="small"),',
+    '"매입단가": st.column_config.TextColumn("매입단가", width="small", help="숫자만 입력하세요."),',
 )
 _render_source = _render_source.replace(
     '''            for row in list(stored_rows):
@@ -103,6 +113,7 @@ _render_source = _render_source.replace(
 )
 
 _namespace = dict(base.__dict__)
+_namespace["_price_text"] = _price_text
 exec(_render_source, _namespace)
 render = _namespace["render"]
 item_key = base.item_key
