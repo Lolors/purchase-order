@@ -8,6 +8,29 @@ import pandas as pd
 from ui.pages import statement_register_substitution as base
 
 
+def item_key(row) -> tuple:
+    """대체입고는 실제 입고품이 아니라 원발주품목 기준으로 집계합니다."""
+    original_code = str(row.get("원발주제품코드", "") or "").strip()
+    original_name = str(row.get("원발주제품명", "") or "").strip()
+    original_spec = str(row.get("원발주규격", "") or "").strip()
+    original_unit = str(row.get("원발주단위", "") or "").strip()
+
+    if original_code:
+        return ("CODE", original_code)
+    if original_name or original_spec or original_unit:
+        return ("TEXT", original_name, original_spec, original_unit)
+
+    code = str(row.get("제품코드", "") or "").strip()
+    if code:
+        return ("CODE", code)
+    return (
+        "TEXT",
+        str(row.get("정식제품명", row.get("제품명", "")) or "").strip(),
+        str(row.get("규격", "") or "").strip(),
+        str(row.get("단위", row.get("포장단위", "")) or "").strip(),
+    )
+
+
 def _price_text(value) -> str:
     """매입단가는 화면에서 공란을 유지하고 입력한 숫자 문자열을 그대로 보존합니다."""
     if value is None:
@@ -15,7 +38,6 @@ def _price_text(value) -> str:
     text = str(value).strip()
     if text.lower() in {"nan", "none"}:
         return ""
-    # 기존 숫자 상태가 0인 경우에도 새 입력 화면에서는 빈칸으로 보여줍니다.
     if text in {"0", "0.0"}:
         return ""
     return text
@@ -75,6 +97,7 @@ def _store_entered_rows(st, selected_order: str, entered: pd.DataFrame) -> list[
     return rows
 
 
+base.item_key = item_key
 base._sync_receipt_rows = _sync_receipt_rows
 base._store_entered_rows = _store_entered_rows
 
@@ -114,6 +137,6 @@ _render_source = _render_source.replace(
 
 _namespace = dict(base.__dict__)
 _namespace["_price_text"] = _price_text
+_namespace["item_key"] = item_key
 exec(_render_source, _namespace)
 render = _namespace["render"]
-item_key = base.item_key
