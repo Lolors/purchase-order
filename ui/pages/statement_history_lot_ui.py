@@ -1,4 +1,4 @@
-"""거래명세서 내역에 제조번호와 유통기한을 표시하는 보정 레이어."""
+"""거래명세서 내역에 제조번호·유통기한과 대체입고 정보를 표시하는 보정 레이어."""
 from __future__ import annotations
 
 import pandas as pd
@@ -10,7 +10,7 @@ def _statement_display_table(items: pd.DataFrame, purchase_module):
     rows = items.copy().fillna("")
     for col in [
         "정식제품명", "규격", "제조번호", "유통기한", "입고수량", "단위", "포장단위",
-        "매입단가", "출고단가", "상품금액", "가격적용여부",
+        "매입단가", "출고단가", "상품금액", "가격적용여부", "입고유형", "원발주제품명",
     ]:
         if col not in rows.columns:
             rows[col] = ""
@@ -22,8 +22,14 @@ def _statement_display_table(items: pd.DataFrame, purchase_module):
         amount = -original_amount if returned else base._to_int(purchase_module, row.get("상품금액", 0))
         purchase_price = base._to_int(purchase_module, row.get("매입단가", 0))
         sale_price = base._to_int(purchase_module, row.get("출고단가", 0)) or int(round(purchase_price * 1.3))
+        is_substitution = str(row.get("입고유형", "") or "").strip() == "대체입고"
+        actual_name = str(row.get("정식제품명", "") or "")
+        original_name = str(row.get("원발주제품명", "") or "") if is_substitution else ""
+
         display_rows.append({
-            "정식제품명": str(row.get("정식제품명", "")),
+            "구분": "대체품" if is_substitution else "",
+            "제품명": actual_name,
+            "원발주제품명": original_name,
             "규격": str(row.get("규격", "")),
             "제조번호": str(row.get("제조번호", "")),
             "유통기한": str(row.get("유통기한", "")),
@@ -43,9 +49,18 @@ def _statement_display_table(items: pd.DataFrame, purchase_module):
             return "background-color: #fee2e2; color: #991b1b; font-weight: 700;"
         return ""
 
+    def style_substitution(value):
+        if str(value) == "대체품":
+            return (
+                "background-color: #dcfce7; color: #15803d; font-weight: 700; "
+                "text-align: center; border-radius: 999px;"
+            )
+        return "color: transparent;"
+
     return (
         display.style
         .set_properties(subset=["매출단가"], **{"background-color": "#f3f4f6", "color": "#4b5563"})
+        .applymap(style_substitution, subset=["구분"])
         .applymap(style_status, subset=["상태"])
     )
 
