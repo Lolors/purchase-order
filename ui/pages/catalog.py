@@ -8,7 +8,7 @@ import pandas as pd
 
 from db_migration import normalize_product_code
 
-PRODUCT_COLUMNS = ["제품유형", "제품코드", "제품명", "규격", "포장단위"]
+PRODUCT_COLUMNS = ["제품코드", "제품명", "규격", "포장단위"]
 ALIAS_COLUMNS = ["거래처명", "별칭", "제품코드"]
 VENDOR_COLUMNS = ["거래처코드", "거래처명", "담당자", "연락처", "이메일", "배송지"]
 
@@ -20,8 +20,6 @@ def _normalize_products(df: pd.DataFrame | None) -> pd.DataFrame:
         source["제품명"] = source.get("정식제품명", "")
     if "포장단위" not in source.columns:
         source["포장단위"] = source.get("단위", "")
-    if "제품유형" not in source.columns:
-        source["제품유형"] = ""
     for column in PRODUCT_COLUMNS:
         if column not in source.columns:
             source[column] = ""
@@ -72,7 +70,7 @@ def _product_excel_bytes(products: pd.DataFrame) -> bytes:
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         products.to_excel(writer, index=False, sheet_name="제품목록")
         sheet = writer.book["제품목록"]
-        for column, width in {"A": 16, "B": 18, "C": 36, "D": 20, "E": 18}.items():
+        for column, width in {"A": 18, "B": 36, "C": 20, "D": 18}.items():
             sheet.column_dimensions[column].width = width
     output.seek(0)
     return output.getvalue()
@@ -168,18 +166,16 @@ def products(core_app, data) -> None:
     st = core_app.st
     current = _normalize_products(data["products"])
     st.markdown("## 제품 관리")
-    st.caption("제품유형, 제품코드, 제품명, 규격, 포장단위를 관리합니다.")
+    st.caption("제품코드, 제품명, 규격, 포장단위를 관리합니다.")
 
     with st.container(border=True):
         st.markdown("### 신규 제품 추가")
-        c1, c2, c3 = st.columns(3)
+        c1, c2 = st.columns(2)
         with c1:
-            product_type = st.text_input("제품유형", key="catalog_product_type")
             code = st.text_input("제품코드", key="catalog_product_code")
+            specification = st.text_input("규격", key="catalog_product_specification")
         with c2:
             name = st.text_input("제품명", key="catalog_product_name")
-            specification = st.text_input("규격", key="catalog_product_specification")
-        with c3:
             packaging = st.text_input("포장단위", key="catalog_product_packaging")
         if st.button("제품 추가", type="primary", use_container_width=True, key="catalog_product_add"):
             normalized_code = normalize_product_code(code)
@@ -191,7 +187,6 @@ def products(core_app, data) -> None:
                 st.warning("이미 존재하는 제품코드입니다.")
             else:
                 row = pd.DataFrame([{
-                    "제품유형": product_type.strip(),
                     "제품코드": normalized_code,
                     "제품명": name.strip(),
                     "규격": specification.strip(),
@@ -268,78 +263,76 @@ def aliases(core_app, data) -> None:
     vendors_df = _normalize_vendors(data["vendors"])
     products_df = _normalize_products(data["products"])
     aliases_df = _normalize_aliases(data["aliases"])
-    st.markdown("## 별칭 관리")
-    st.caption("별칭은 변하지 않는 제품코드에 연결됩니다. 제품목록을 교체해도 같은 제품코드의 현재 제품정보를 다시 불러옵니다.")
 
-    lookup = products_df.set_index("제품코드", drop=False) if not products_df.empty else pd.DataFrame()
-    vendor_options = ["전체"] + vendors_df["거래처명"].drop_duplicates().tolist()
-    product_codes = products_df["제품코드"].tolist()
+    st.markdown("## 별칭 관리")
+    st.caption("거래처가 사용하는 별칭을 정식 제품코드와 연결합니다.")
+
+    if products_df.empty:
+        st.warning("먼저 제품을 등록하세요.")
+        return
+
+    vendor_options = ["전체"] + vendors_df["거래처명"].astype(str).tolist()
+    product_options = products_df["제품코드"].astype(str).tolist()
+    product_label = products_df.set_index("제품코드").apply(
+        lambda row: f'{row.get("제품명", "")} / {row.get("규격", "")} / {row.name}', axis=1
+    ).to_dict()
 
     with st.container(border=True):
-        st.markdown("### 신규 별칭 추가")
-        selected_vendor = st.selectbox("거래처", vendor_options, key="catalog_alias_vendor")
-        alias_name = st.text_input("별칭", key="catalog_alias_name")
-        selected_code = st.selectbox(
-            "연결 제품",
-            product_codes,
-            format_func=lambda value: f'{lookup.loc[value, "제품명"]} ({value})',
+        st.markdown("### 별칭 추가")
+        c1, c2, c3 = st.columns([1.2, 2, 2.4])
+        vendor_name = c1.selectbox("거래처", vendor_options, key="catalog_alias_vendor")
+        alias = c2.text_input("별칭", key="catalog_alias_name")
+        code = c3.selectbox(
+            "정식 제품",
+            product_options,
+            format_func=lambda value: product_label.get(value, value),
             key="catalog_alias_product",
-        ) if product_codes else None
+        )
         if st.button("별칭 추가", type="primary", use_container_width=True, key="catalog_alias_add"):
-            if not alias_name.strip():
+            if not alias.strip():
                 st.warning("별칭을 입력하세요.")
-            elif not selected_code:
-                st.warning("연결할 제품을 선택하세요.")
             else:
-                row = pd.DataFrame([{
-                    "거래처명": selected_vendor,
-                    "별칭": alias_name.strip(),
-                    "제품코드": normalize_product_code(selected_code),
+                new_row = pd.DataFrame([{
+                    "거래처명": vendor_name,
+                    "별칭": alias.strip(),
+                    "제품코드": code,
                 }])
-                combined = _normalize_aliases(pd.concat([aliases_df, row], ignore_index=True))
-                if len(combined) == len(aliases_df):
-                    st.warning("이미 등록된 별칭입니다.")
-                else:
-                    core_app.save_aliases(combined)
-                    st.success("별칭을 추가했습니다.")
-                    st.rerun()
+                saved = _normalize_aliases(pd.concat([aliases_df, new_row], ignore_index=True))
+                core_app.save_aliases(saved)
+                st.success("별칭을 추가했습니다.")
+                st.rerun()
 
     st.markdown("### 별칭 목록 수정")
     if aliases_df.empty:
         st.info("등록된 별칭이 없습니다.")
         return
     view = aliases_df.copy()
-    view["제품명"] = view["제품코드"].map(
-        lambda code: lookup.loc[code, "제품명"] if not lookup.empty and code in lookup.index else "현재 제품목록에 없음"
-    )
-    view["규격"] = view["제품코드"].map(
-        lambda code: lookup.loc[code, "규격"] if not lookup.empty and code in lookup.index else ""
-    )
-    view["포장단위"] = view["제품코드"].map(
-        lambda code: lookup.loc[code, "포장단위"] if not lookup.empty and code in lookup.index else ""
-    )
     view.insert(0, "삭제", False)
     edited = st.data_editor(
-        view[["삭제", "거래처명", "별칭", "제품코드", "제품명", "규격", "포장단위"]],
+        view[["삭제"] + ALIAS_COLUMNS],
         use_container_width=True,
         hide_index=True,
-        disabled=["제품코드", "제품명", "규격", "포장단위"],
+        num_rows="dynamic",
         column_config={
             "삭제": st.column_config.CheckboxColumn("삭제"),
-            "거래처명": st.column_config.SelectboxColumn("거래처명", options=vendor_options),
-            "제품코드": st.column_config.TextColumn("제품코드"),
+            "거래처명": st.column_config.SelectboxColumn("거래처", options=vendor_options),
+            "제품코드": st.column_config.SelectboxColumn(
+                "정식 제품",
+                options=product_options,
+                format_func=lambda value: product_label.get(value, value),
+            ),
         },
         key="catalog_alias_editor",
     )
     save_col, delete_col = st.columns(2)
     with save_col:
         if st.button("별칭 수정 저장", use_container_width=True, key="catalog_alias_save"):
-            core_app.save_aliases(_normalize_aliases(edited))
+            core_app.save_aliases(_normalize_aliases(edited.drop(columns=["삭제"])))
             st.success("별칭 정보를 저장했습니다.")
             st.rerun()
     with delete_col:
         if st.button("선택 별칭 삭제", use_container_width=True, key="catalog_alias_delete"):
-            remaining = edited.loc[edited["삭제"] != True]
+            remaining = edited.loc[edited["삭제"] != True].drop(columns=["삭제"])
             core_app.save_aliases(_normalize_aliases(remaining))
             st.success("선택한 별칭을 삭제했습니다.")
             st.rerun()
