@@ -13,18 +13,31 @@ def _to_int(purchase_module, value) -> int:
 
 
 def item_key(row) -> tuple:
+    """입고수량을 원발주품목 기준으로 묶는 안정적인 식별키를 반환합니다.
+
+    대체입고 행에는 실제 입고제품과 원발주제품 정보가 함께 저장됩니다.
+    원발주제품코드가 비어 있더라도 원발주제품명/규격/단위가 있으면 실제
+    대체제품 코드보다 원발주 텍스트 조합을 우선해야 발주 품목 입고로
+    정상 집계됩니다.
+    """
     original_code = str(row.get("원발주제품코드", "") or "").strip()
-    code = original_code or str(row.get("제품코드", "") or "").strip()
-    if code:
-        return ("CODE", code)
     original_name = str(row.get("원발주제품명", "") or "").strip()
     original_spec = str(row.get("원발주규격", "") or "").strip()
     original_unit = str(row.get("원발주단위", "") or "").strip()
+
+    if original_code:
+        return ("CODE", original_code)
+    if original_name or original_spec or original_unit:
+        return ("TEXT", original_name, original_spec, original_unit)
+
+    code = str(row.get("제품코드", "") or "").strip()
+    if code:
+        return ("CODE", code)
     return (
         "TEXT",
-        original_name or str(row.get("정식제품명", row.get("제품명", "")) or "").strip(),
-        original_spec or str(row.get("규격", "") or "").strip(),
-        original_unit or str(row.get("단위", row.get("포장단위", "")) or "").strip(),
+        str(row.get("정식제품명", row.get("제품명", "")) or "").strip(),
+        str(row.get("규격", "") or "").strip(),
+        str(row.get("단위", row.get("포장단위", "")) or "").strip(),
     )
 
 
